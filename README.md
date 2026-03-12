@@ -520,14 +520,6 @@ Gateway에서 패킷 재할당 없이 라우팅 헤더를 prepend하기 위해, 
 전달 시: [EndPointHdr][──Payload──]   ← 복사 없이 Headroom을 헤더로 사용
 ```
 
-### 메모리 최적화 원칙
-
-- Hot path에서 Heap 할당 최소화
-- `struct` 기반 메시지 타입 선호
-- `ArrayPool<byte>.Shared` 재사용
-- Primary Constructor 사용
-- CPU-Bound 작업에 불필요한 `async/await` 금지
-
 ---
 
 ## 사용 기술
