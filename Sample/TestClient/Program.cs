@@ -54,6 +54,7 @@ class Program
             Console.WriteLine("  3. Duplicate Login (중복 로그인)");
             Console.WriteLine("  4. Inactivity Timeout (타임아웃)");
             Console.WriteLine("  5. Reconnect (재연결)");
+            Console.WriteLine("  6. Delayed Reconnect (20초 후 재연결)");
             Console.WriteLine("  r. Refresh Gateway list");
             Console.WriteLine("  0. Exit");
             Console.Write("> ");
@@ -77,6 +78,9 @@ class Program
                     break;
                 case "5":
                     await RunReconnectScenario(pubKeyPath);
+                    break;
+                case "6":
+                    await RunDelayedReconnectScenario(pubKeyPath);
                     break;
                 case "r":
                     await DiscoverGatewaysFromRedis(redisConn, registryKey);
@@ -428,6 +432,119 @@ class Program
             else
             {
                 Console.WriteLine($"[Reconnect] FAILED: {reconnRes.ErrorMessage}");
+            }
+        }
+        catch (Exception ex) { PrintError(ex); }
+        finally { await cts2.CancelAsync(); }
+    }
+
+    // ──────────────────────────────────────────────
+    // Scenario 6: Delayed Reconnect (20초 후 재연결)
+    // ──────────────────────────────────────────────
+    static async Task RunDelayedReconnectScenario(string? pubKeyPath)
+    {
+        Console.WriteLine("── Scenario: Delayed Reconnect (20s) ──");
+        Console.WriteLine("[DelayReconn] 로그인 → 강제 Disconnect → 20초 대기 → 재연결(Grace Period 내)");
+        Console.WriteLine("[DelayReconn] 서버 ReconnectGracePeriod(기본 30s) 이내이므로 재연결 성공 예상");
+
+        using var cts = new CancellationTokenSource();
+        using var client1 = CreateClient(pubKeyPath);
+        _ = UpdateLoop(client1, cts);
+
+        string? reconnectKey;
+
+        try
+        {
+            var loginRes = await ConnectAndLogin(client1, "user-delayed-reconnect", cts.Token);
+            reconnectKey = loginRes.ReconnectKey;
+            Console.WriteLine($"[DelayReconn] Logged in: ReconnectKey={reconnectKey}");
+
+            // Echo 확인
+            var echo1 = await client1.RequestAsync<EchoReq, EchoRes>(
+                new EchoReq { Message = "before disconnect" },
+                SendOptions.Encrypted, cts.Token);
+            Console.WriteLine($"[DelayReconn] Echo OK: {echo1.Message}");
+
+            // 강제 disconnect (TCP 끊기)
+            Console.WriteLine("[DelayReconn] Disconnecting TCP...");
+            client1.Disconnect();
+            await Task.Delay(1000); // 서버 감지 대기
+        }
+        catch (Exception ex)
+        {
+            PrintError(ex);
+            return;
+        }
+        finally { await cts.CancelAsync(); }
+
+        // 20초 대기 (Grace Period 30s 이내)
+        Console.WriteLine("[DelayReconn] Waiting 20 seconds before reconnect...");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 20; i > 0; i--)
+        {
+            Console.Write($"\r[DelayReconn] {i}s remaining... ");
+            await Task.Delay(1000);
+        }
+        Console.WriteLine($"\r[DelayReconn] Wait complete ({sw.Elapsed.TotalSeconds:F1}s elapsed)");
+
+        // 재연결: 새 클라이언트로 TCP 연결 → Handshake → ReconnectReq
+        Console.WriteLine("[DelayReconn] Reconnecting with new TCP connection...");
+
+        using var cts2 = new CancellationTokenSource();
+        using var client2 = CreateClient(pubKeyPath);
+        _ = UpdateLoop(client2, cts2);
+
+        try
+        {
+            var connected = await client2.ConnectAsync(cts2.Token);
+            if (!connected)
+            {
+                Console.WriteLine("[DelayReconn] FAILED: Cannot connect for reconnect.");
+                return;
+            }
+            Console.WriteLine("[DelayReconn] TCP + Handshake OK.");
+
+            // ReconnectReq 전송
+            Console.WriteLine($"[DelayReconn] Sending ReconnectReq (key={reconnectKey})...");
+            var reconnRes = await client2.RequestAsync<ReconnectReq, ReconnectRes>(
+                new ReconnectReq
+                {
+                    ReconnectKey = reconnectKey!,
+                    LastSequenceId = 0
+                },
+                SendOptions.Encrypted, cts2.Token);
+
+            // Cross-Node: 서버가 Gateway Re-route 후 재시도 요청
+            if (!reconnRes.Success && reconnRes.RequiresRetry)
+            {
+                Console.WriteLine("[DelayReconn] Cross-node detected, Gateway re-routed. Retrying...");
+                reconnRes = await client2.RequestAsync<ReconnectReq, ReconnectRes>(
+                    new ReconnectReq
+                    {
+                        ReconnectKey = reconnectKey!,
+                        LastSequenceId = 0
+                    },
+                    SendOptions.Encrypted, cts2.Token);
+            }
+
+            if (reconnRes.Success)
+            {
+                Console.WriteLine($"[DelayReconn] Reconnect OK after 20s delay: NewKey={reconnRes.NewReconnectKey}");
+                client2.ReconnectKey = reconnRes.NewReconnectKey;
+
+                // 재연결 후 Echo 확인
+                var echo2 = await client2.RequestAsync<EchoReq, EchoRes>(
+                    new EchoReq { Message = "after delayed reconnect" },
+                    SendOptions.Encrypted, cts2.Token);
+                Console.WriteLine($"[DelayReconn] Echo after reconnect: {echo2.Message}");
+
+                await SendLogout(client2, cts2.Token);
+                Console.WriteLine("[DelayReconn] SUCCESS — Grace Period 내 재연결 성공");
+            }
+            else
+            {
+                Console.WriteLine($"[DelayReconn] FAILED: {reconnRes.ErrorMessage}");
+                Console.WriteLine("[DelayReconn] Grace Period가 만료되었거나 Actor가 이미 정리되었을 수 있습니다.");
             }
         }
         catch (Exception ex) { PrintError(ex); }
