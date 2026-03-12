@@ -78,15 +78,21 @@ public interface ISessionActor : IDisposable
     Guid RegenerateReconnectKey();
 
     /// <summary>
-    /// Grace Period 타이머 시작 (Disconnected → 일정 시간 후 정리)
-    /// 기존 타이머가 있으면 취소 후 새로 시작
+    /// Disconnected 상태 진입 시각 (Stopwatch.GetTimestamp 기반).
+    /// InactivityScanner가 Grace Period 만료를 판단하는 데 사용.
+    /// 0이면 Disconnected 상태가 아님.
     /// </summary>
-    void StartGracePeriod(TimeSpan duration, Func<Task> onExpired);
+    long DisconnectedTicks { get; }
 
     /// <summary>
-    /// Grace Period 타이머 취소 (재접속 성공 시 호출)
+    /// Disconnected 상태 진입 시각 기록
     /// </summary>
-    void CancelGracePeriod();
+    void MarkDisconnected();
+
+    /// <summary>
+    /// Disconnected 타임스탬프 초기화 (재접속 성공 시 호출)
+    /// </summary>
+    void ClearDisconnected();
 
     /// <summary>
     /// Actor mailbox에 비동기 콜백을 push하고 완료를 대기.

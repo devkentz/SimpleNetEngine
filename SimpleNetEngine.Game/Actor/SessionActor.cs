@@ -30,8 +30,8 @@ public class SessionActor : ISessionActor
     private readonly QueuedResponseWriter<IActorMessage> _mailbox;
     private long _sequenceId;
     private long _lastActivityTicks;
+    private long _disconnectedTicks;
     private Guid _reconnectKey;
-    private CancellationTokenSource? _gracePeriodCts;
 
     public long ActorId { get; set; }
     public long UserId { get; set; }
@@ -40,6 +40,7 @@ public class SessionActor : ISessionActor
     public Dictionary<string, object> State { get; } = [];
     public long SequenceId => _sequenceId;
     public long LastActivityTicks => Volatile.Read(ref _lastActivityTicks);
+    public long DisconnectedTicks => Volatile.Read(ref _disconnectedTicks);
     public Guid ReconnectKey => _reconnectKey;
 
     public SessionActor(
@@ -115,44 +116,20 @@ public class SessionActor : ISessionActor
     }
 
     /// <summary>
-    /// Grace Period 타이머 시작
+    /// Disconnected 상태 진입 시각 기록.
+    /// InactivityScanner가 Grace Period 만료를 판단하는 데 사용.
     /// </summary>
-    public void StartGracePeriod(TimeSpan duration, Func<Task> onExpired)
+    public void MarkDisconnected()
     {
-        CancelGracePeriod();
-        var cts = new CancellationTokenSource();
-        _gracePeriodCts = cts;
-        var token = cts.Token;
-
-        _ = Task.Delay(duration, token).ContinueWith(async t =>
-        {
-            if (!t.IsCanceled)
-            {
-                try
-                {
-                    await onExpired();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "Grace period expiry callback error: ActorId={ActorId}, UserId={UserId}",
-                        ActorId, UserId);
-                }
-            }
-        }, TaskScheduler.Default);
+        Volatile.Write(ref _disconnectedTicks, Stopwatch.GetTimestamp());
     }
 
     /// <summary>
-    /// Grace Period 타이머 취소
+    /// Disconnected 타임스탬프 초기화 (재접속 성공 시 호출)
     /// </summary>
-    public void CancelGracePeriod()
+    public void ClearDisconnected()
     {
-        var old = Interlocked.Exchange(ref _gracePeriodCts, null);
-        if (old != null)
-        {
-            old.Cancel();
-            old.Dispose();
-        }
+        Volatile.Write(ref _disconnectedTicks, 0);
     }
 
     /// <summary>
@@ -264,7 +241,6 @@ public class SessionActor : ISessionActor
 
     public void Dispose()
     {
-        CancelGracePeriod();
         _mailbox.Dispose();
     }
 }

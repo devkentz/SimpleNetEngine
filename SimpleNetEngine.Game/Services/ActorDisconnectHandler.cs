@@ -8,8 +8,10 @@ namespace SimpleNetEngine.Game.Services;
 
 /// <summary>
 /// Actor disconnect/cleanup 공통 핸들러.
-/// AllowSessionResume(Disconnected + Grace Period) / TerminateSession(즉시 제거)
+/// AllowSessionResume(Disconnected + 타임스탬프 기록) / TerminateSession(즉시 제거)
 /// 두 가지 정책을 캡슐화하여 중복 코드를 제거한다.
+///
+/// Grace Period 만료 판단은 InactivityScanner가 주기적 스캔으로 처리.
 ///
 /// 호출자: ConnectionController, InactivityScanner, KickoutController
 /// 반드시 actor.ExecuteAsync (mailbox context) 내부에서 호출할 것.
@@ -18,24 +20,23 @@ public class ActorDisconnectHandler(
     ISessionActorManager actorManager,
     ActorDisposeQueue disposeQueue,
     ISessionStore sessionStore,
-    IServiceScopeFactory scopeFactory,
     ILogger<ActorDisconnectHandler> logger)
 {
     /// <summary>
-    /// AllowSessionResume: Disconnected 상태 전이 + Grace Period 시작.
-    /// Grace Period 만료 시 OnLogoutAsync → Redis 삭제 → Actor 제거.
+    /// AllowSessionResume: Disconnected 상태 전이 + 타임스탬프 기록.
+    /// Grace Period 만료 판단은 InactivityScanner가 주기적 스캔으로 처리.
     ///
     /// 반드시 actor.ExecuteAsync 내부에서 호출할 것 (mailbox 스레드 안전성).
     /// </summary>
     public async Task AllowSessionResumeAsync(
         ISessionActor actor,
-        ILoginHandler loginHandler,
-        TimeSpan gracePeriod)
+        ILoginHandler loginHandler)
     {
         if (actor.Status is ActorState.Disposed or ActorState.Disconnected)
             return;
 
         actor.Status = ActorState.Disconnected;
+        actor.MarkDisconnected();
         var sessionId = actor.ActorId;
         var userId = actor.UserId;
 
@@ -44,26 +45,33 @@ public class ActorDisconnectHandler(
             sessionId, userId);
 
         await loginHandler.OnDisconnectedAsync(actor);
+    }
 
-        actor.StartGracePeriod(gracePeriod, async () =>
-        {
-            logger.LogInformation(
-                "Grace period expired: SessionId={SessionId}, UserId={UserId}",
-                sessionId, userId);
+    /// <summary>
+    /// Grace Period 만료 시 cleanup 실행.
+    /// InactivityScanner가 actor.ExecuteAsync 내부에서 호출.
+    /// OnLogoutAsync → Redis 삭제 → Actor 제거.
+    /// </summary>
+    public async Task ExpireGracePeriodAsync(
+        ISessionActor actor,
+        ILoginHandler loginHandler)
+    {
+        var sessionId = actor.ActorId;
+        var userId = actor.UserId;
 
-            // ILoginHandler는 Scoped — Grace Period 콜백은 원래 스코프 밖이므로 새 스코프 생성
-            using var scope = scopeFactory.CreateScope();
-            var graceLoginHandler = scope.ServiceProvider.GetRequiredService<ILoginHandler>();
+        logger.LogInformation(
+            "Grace period expired: SessionId={SessionId}, UserId={UserId}",
+            sessionId, userId);
 
-            await graceLoginHandler.OnLogoutAsync(actor);
-            await sessionStore.DeleteReconnectKeyAsync(actor.ReconnectKey);
-            var result = actorManager.UnregisterActor(sessionId);
-            if (result.IsSuccess)
-                disposeQueue.Enqueue(result.Value);
+        await loginHandler.OnLogoutAsync(actor);
+        await sessionStore.DeleteReconnectKeyAsync(actor.ReconnectKey);
 
-            // 조건부 삭제: 내 SessionId와 일치할 때만 삭제 (다른 노드가 덮어쓴 경우 보호)
-            await sessionStore.DeleteSessionIfMatchAsync(userId, sessionId);
-        });
+        var result = actorManager.UnregisterActor(sessionId);
+        if (result.IsSuccess)
+            disposeQueue.Enqueue(result.Value);
+
+        // 조건부 삭제: 내 SessionId와 일치할 때만 삭제 (다른 노드가 덮어쓴 경우 보호)
+        await sessionStore.DeleteSessionIfMatchAsync(userId, sessionId);
     }
 
     /// <summary>

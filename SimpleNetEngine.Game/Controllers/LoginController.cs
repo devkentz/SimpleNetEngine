@@ -255,8 +255,8 @@ public class LoginController(
             "LogoutReq received: ActorId={ActorId}, UserId={UserId}",
             actor.ActorId, actor.UserId);
 
-        // Grace Period가 진행 중이면 취소
-        actor.CancelGracePeriod();
+        // Disconnected 상태였으면 타임스탬프 초기화
+        actor.ClearDisconnected();
 
         // 앱 Hook: 최종 데이터 저장
         await loginHandler.OnLogoutAsync(actor);

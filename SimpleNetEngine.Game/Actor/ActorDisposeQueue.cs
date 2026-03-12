@@ -10,8 +10,7 @@ namespace SimpleNetEngine.Game.Actor;
 ///
 /// 사용처:
 /// - HandleLogout: Actor mailbox 안에서 실행 → RemoveActor 대신 UnregisterActor + Enqueue
-/// - InactivityScanner: actor.ExecuteAsync 안에서 실행 → 동일
-/// - GracePeriod 만료 콜백: ContinueWith 안에서 실행 → 동일
+/// - InactivityScanner: actor.ExecuteAsync 안에서 실행 → 동일 (비활성 감지 + Grace Period 만료 포함)
 /// </summary>
 public class ActorDisposeQueue(ILogger<ActorDisposeQueue> logger)
 {

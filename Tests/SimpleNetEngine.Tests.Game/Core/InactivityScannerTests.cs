@@ -17,7 +17,7 @@ namespace SimpleNetEngine.Tests.Game.Core;
 /// <summary>
 /// InactivityScanner.DisconnectClientAsync 유닛 테스트
 /// - OnInactivityTimeoutAsync Hook에 따른 DisconnectAction 분기
-/// - AllowSessionResume: Disconnected 전이 + Grace Period + Gateway 종료
+/// - AllowSessionResume: Disconnected 전이 + MarkDisconnected + Gateway 종료
 /// - TerminateSession: 즉시 Actor 제거 + Gateway 종료
 /// </summary>
 public class InactivityScannerTests
@@ -82,7 +82,6 @@ public class InactivityScannerTests
             _actorManagerMock.Object,
             new ActorDisposeQueue(NullLogger<ActorDisposeQueue>.Instance),
             _sessionStoreMock.Object,
-            _scopeFactoryMock.Object,
             NullLogger<ActorDisconnectHandler>.Instance);
 
         var scanner = new InactivityScanner(
@@ -111,11 +110,9 @@ public class InactivityScannerTests
         // Act
         await InvokeDisconnectClientAsync(actorMock.Object);
 
-        // Assert: Disconnected 전이 + Grace Period
+        // Assert: Disconnected 전이 + MarkDisconnected
         actorMock.Object.Status.Should().Be(ActorState.Disconnected);
-        actorMock.Verify(
-            a => a.StartGracePeriod(TimeSpan.FromSeconds(30), It.IsAny<Func<Task>>()),
-            Times.Once);
+        actorMock.Verify(a => a.MarkDisconnected(), Times.Once);
 
         // OnDisconnectedAsync Hook 호출됨
         _loginHandlerMock.Verify(
@@ -144,11 +141,9 @@ public class InactivityScannerTests
         // Act
         await InvokeDisconnectClientAsync(actorMock.Object);
 
-        // Assert: 즉시 제거, Grace Period 미시작
+        // Assert: 즉시 제거, MarkDisconnected 미호출
         _actorManagerMock.Verify(x => x.UnregisterActor(SessionId), Times.Once);
-        actorMock.Verify(
-            a => a.StartGracePeriod(It.IsAny<TimeSpan>(), It.IsAny<Func<Task>>()),
-            Times.Never);
+        actorMock.Verify(a => a.MarkDisconnected(), Times.Never);
     }
 
     [Fact]
@@ -185,7 +180,6 @@ public class InactivityScannerTests
             _actorManagerMock.Object,
             new ActorDisposeQueue(NullLogger<ActorDisposeQueue>.Instance),
             _sessionStoreMock.Object,
-            _scopeFactoryMock.Object,
             NullLogger<ActorDisconnectHandler>.Instance);
 
         var scanner = new InactivityScanner(

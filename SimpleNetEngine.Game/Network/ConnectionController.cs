@@ -1,11 +1,9 @@
 using Internal.Protocol;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using SimpleNetEngine.Game.Actor;
 using SimpleNetEngine.Game.Core;
 using SimpleNetEngine.Game.Middleware;
-using SimpleNetEngine.Game.Options;
 using SimpleNetEngine.Game.Services;
 using SimpleNetEngine.Game.Session;
 using SimpleNetEngine.Node.Core;
@@ -34,7 +32,6 @@ public class ConnectionController(
     IMessageDispatcher messageDispatcher,
     IServiceScopeFactory scopeFactory,
     MiddlewarePipelineFactory pipelineFactory,
-    IOptions<GameOptions> options,
     GameSessionChannelListener gscListener)
 {
     [NodePacketHandler(ServiceMeshNewUserNtfReq.MsgId)]
@@ -128,18 +125,16 @@ public class ConnectionController(
 
         var actor = actorResult.Value;
 
-        // Active 상태: Actor mailbox를 통해 Disconnected 전이 + Hook + Grace Period
+        // Active 상태: Actor mailbox를 통해 Disconnected 전이 + Hook
         // NodeController(Service Mesh) 스레드에서 직접 변경하면 Actor mailbox 컨슈머와 race condition 발생
         if (actor.Status == ActorState.Active)
         {
-            var gracePeriod = options.Value.ReconnectGracePeriod;
-
             await actor.ExecuteAsync(async _ =>
             {
                 if (actor.Status != ActorState.Active)
                     return;
 
-                await disconnectHandler.AllowSessionResumeAsync(actor, loginHandler, gracePeriod);
+                await disconnectHandler.AllowSessionResumeAsync(actor, loginHandler);
             });
 
             return new ServiceMeshClientDisconnectedNtfRes { Success = true };

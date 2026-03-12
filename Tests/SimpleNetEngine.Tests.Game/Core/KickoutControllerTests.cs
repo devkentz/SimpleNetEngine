@@ -44,7 +44,6 @@ public class KickoutControllerTests
             _actorManagerMock.Object,
             new ActorDisposeQueue(NullLogger<ActorDisposeQueue>.Instance),
             _sessionStoreMock.Object,
-            Mock.Of<IServiceScopeFactory>(),
             NullLogger<ActorDisconnectHandler>.Instance);
 
         return new KickoutController(
@@ -52,8 +51,7 @@ public class KickoutControllerTests
             _actorManagerMock.Object,
             disconnectHandler,
             _disconnectQueue,
-            _loginHandlerMock.Object,
-            _options);
+            _loginHandlerMock.Object);
     }
 
     public KickoutControllerTests()
@@ -129,7 +127,7 @@ public class KickoutControllerTests
     }
 
     [Fact]
-    public async Task HandleKickout_AllowSessionResume_ShouldTransitionToDisconnectedWithGracePeriod()
+    public async Task HandleKickout_AllowSessionResume_ShouldTransitionToDisconnectedWithMarkDisconnected()
     {
         // Arrange
         var actorMock = CreateActorMock();
@@ -140,11 +138,9 @@ public class KickoutControllerTests
         // Act
         var res = await CreateSut().HandleKickout(CreateReq());
 
-        // Assert: Disconnected 전이 + Grace Period
+        // Assert: Disconnected 전이 + MarkDisconnected
         actorMock.Object.Status.Should().Be(ActorState.Disconnected);
-        actorMock.Verify(
-            a => a.StartGracePeriod(TimeSpan.FromSeconds(30), It.IsAny<Func<Task>>()),
-            Times.Once);
+        actorMock.Verify(a => a.MarkDisconnected(), Times.Once);
         res.Success.Should().BeTrue();
 
         // Actor 즉시 제거 안 됨

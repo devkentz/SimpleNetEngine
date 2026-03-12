@@ -144,7 +144,7 @@ public class LogoutControllerTests
     }
 
     [Fact]
-    public async Task HandleLogout_ShouldCancelGracePeriod()
+    public async Task HandleLogout_ShouldClearDisconnected()
     {
         // Arrange
         var actor = CreateActiveActor();
@@ -153,6 +153,6 @@ public class LogoutControllerTests
         await _sut.HandleLogout(actor.Object, new LogoutReq());
 
         // Assert
-        actor.Verify(a => a.CancelGracePeriod(), Times.Once);
+        actor.Verify(a => a.ClearDisconnected(), Times.Once);
     }
 }

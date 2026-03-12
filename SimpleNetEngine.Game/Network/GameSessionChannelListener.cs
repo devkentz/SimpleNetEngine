@@ -393,10 +393,10 @@ public class GameSessionChannelListener : IDisposable
 
     public void Dispose()
     {
+        _cts.Cancel();
         _poller?.Dispose();
         _router?.Dispose();
         _sendQueue?.Dispose();
-        _cts.Cancel();
         _logger.LogInformation("GameSessionChannel Listener stopped");
     }
 }

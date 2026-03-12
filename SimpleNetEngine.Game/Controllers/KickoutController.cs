@@ -1,10 +1,8 @@
 using Internal.Protocol;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using SimpleNetEngine.Game.Actor;
 using SimpleNetEngine.Game.Network;
 using SimpleNetEngine.Game.Session;
-using SimpleNetEngine.Game.Options;
 using SimpleNetEngine.Game.Services;
 using SimpleNetEngine.Node.Core;
 
@@ -31,8 +29,7 @@ public class KickoutController(
     ISessionActorManager actorManager,
     ActorDisconnectHandler disconnectHandler,
     GatewayDisconnectQueue disconnectQueue,
-    ILoginHandler loginHandler,
-    IOptions<GameOptions> options)
+    ILoginHandler loginHandler)
 {
     [NodePacketHandler(ServiceMeshKickoutReq.MsgId)]
     public async Task<ServiceMeshKickoutRes> HandleKickout(ServiceMeshKickoutReq req)
@@ -67,7 +64,7 @@ public class KickoutController(
 
             if (action == DisconnectAction.AllowSessionResume)
             {
-                await disconnectHandler.AllowSessionResumeAsync(actor, loginHandler, options.Value.ReconnectGracePeriod);
+                await disconnectHandler.AllowSessionResumeAsync(actor, loginHandler);
             }
             else
             {

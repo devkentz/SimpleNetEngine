@@ -12,11 +12,13 @@ using SimpleNetEngine.Game.Options;
 namespace SimpleNetEngine.Game.Services;
 
 /// <summary>
-/// 비활성 클라이언트 감지 BackgroundService.
-/// 주기적으로 모든 Active Actor를 스캔하여 InactivityTimeout을 초과한 Actor를 감지하고,
-/// ILoginHandler.OnInactivityTimeoutAsync의 DisconnectAction에 따라
-/// ActorDisconnectHandler에 위임한다.
-/// 이후 GatewayDisconnectQueue에 소켓 해제를 예약한다.
+/// Actor 생명주기 스캐너 BackgroundService.
+///
+/// 두 가지 역할을 통합:
+/// 1. Active Actor 비활성 감지: InactivityTimeout 초과 시 Disconnect 처리
+/// 2. Disconnected Actor Grace Period 만료: ReconnectGracePeriod 초과 시 cleanup (OnLogoutAsync → Redis 삭제 → Actor 제거)
+///
+/// 스캔 간격은 두 타임아웃 중 짧은 값의 1/3 (최소 1초).
 /// </summary>
 public class InactivityScanner(
     ISessionActorManager actorManager,
@@ -31,55 +33,94 @@ public class InactivityScanner(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (_inactivityTimeout <= TimeSpan.Zero)
+        if (_inactivityTimeout <= TimeSpan.Zero && _gracePeriod <= TimeSpan.Zero)
         {
-            logger.LogInformation("InactivityScanner disabled (InactivityTimeout <= 0)");
+            logger.LogInformation("InactivityScanner disabled (both InactivityTimeout and ReconnectGracePeriod <= 0)");
             return;
         }
 
-        // 스캔 간격: InactivityTimeout / 3 (충분한 감지 해상도)
-        var scanInterval = TimeSpan.FromTicks(_inactivityTimeout.Ticks / 3);
+        // 스캔 간격: 활성 타임아웃 중 짧은 값의 1/3 (충분한 감지 해상도)
+        var minTimeout = GetMinPositiveTimeout();
+        var scanInterval = TimeSpan.FromTicks(minTimeout.Ticks / 3);
         if (scanInterval < TimeSpan.FromSeconds(1))
             scanInterval = TimeSpan.FromSeconds(1);
 
         logger.LogInformation(
-            "InactivityScanner started: Timeout={Timeout}s, ScanInterval={Interval}s",
-            _inactivityTimeout.TotalSeconds, scanInterval.TotalSeconds);
+            "InactivityScanner started: InactivityTimeout={InactivityTimeout}s, GracePeriod={GracePeriod}s, ScanInterval={Interval}s",
+            _inactivityTimeout.TotalSeconds, _gracePeriod.TotalSeconds, scanInterval.TotalSeconds);
 
         using var timer = new PeriodicTimer(scanInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            ScanInactiveActors();
+            ScanActors();
         }
     }
 
-    private void ScanInactiveActors()
+    private TimeSpan GetMinPositiveTimeout()
+    {
+        if (_inactivityTimeout <= TimeSpan.Zero) return _gracePeriod;
+        if (_gracePeriod <= TimeSpan.Zero) return _inactivityTimeout;
+        return _inactivityTimeout < _gracePeriod ? _inactivityTimeout : _gracePeriod;
+    }
+
+    private void ScanActors()
     {
         var now = Stopwatch.GetTimestamp();
-        var disconnectedCount = 0;
+        var inactiveCount = 0;
+        var expiredCount = 0;
 
         foreach (var actor in actorManager.GetAllActors())
         {
-            if (actor.Status != ActorState.Active)
-                continue;
+            switch (actor.Status)
+            {
+                case ActorState.Active when _inactivityTimeout > TimeSpan.Zero:
+                {
+                    var elapsed = Stopwatch.GetElapsedTime(actor.LastActivityTicks, now);
+                    if (elapsed <= _inactivityTimeout)
+                        continue;
 
-            var elapsed = Stopwatch.GetElapsedTime(actor.LastActivityTicks, now);
-            if (elapsed <= _inactivityTimeout)
-                continue;
+                    logger.LogWarning(
+                        "Inactivity detected: SessionId={SessionId}, UserId={UserId}, Idle={IdleSeconds}s",
+                        actor.ActorId, actor.UserId, elapsed.TotalSeconds);
 
-            logger.LogWarning(
-                "Inactivity detected: SessionId={SessionId}, UserId={UserId}, Idle={IdleSeconds}s",
-                actor.ActorId, actor.UserId, elapsed.TotalSeconds);
+                    _ = DisconnectClientAsync(actor);
+                    inactiveCount++;
+                    break;
+                }
 
-            _ = DisconnectClientAsync(actor);
-            disconnectedCount++;
+                case ActorState.Disconnected when _gracePeriod > TimeSpan.Zero:
+                {
+                    var disconnectedTicks = actor.DisconnectedTicks;
+                    if (disconnectedTicks == 0)
+                        continue;
+
+                    var elapsed = Stopwatch.GetElapsedTime(disconnectedTicks, now);
+                    if (elapsed <= _gracePeriod)
+                        continue;
+
+                    logger.LogInformation(
+                        "Grace period expired: SessionId={SessionId}, UserId={UserId}, Disconnected={DisconnectedSeconds}s",
+                        actor.ActorId, actor.UserId, elapsed.TotalSeconds);
+
+                    _ = ExpireGracePeriodAsync(actor);
+                    expiredCount++;
+                    break;
+                }
+            }
         }
 
-        if (disconnectedCount > 0)
+        if (inactiveCount > 0)
         {
             logger.LogInformation(
                 "InactivityScanner: {Count} client(s) disconnected due to inactivity",
-                disconnectedCount);
+                inactiveCount);
+        }
+
+        if (expiredCount > 0)
+        {
+            logger.LogInformation(
+                "InactivityScanner: {Count} actor(s) cleaned up after grace period expiry",
+                expiredCount);
         }
     }
 
@@ -102,7 +143,7 @@ public class InactivityScanner(
 
                 if (action == DisconnectAction.AllowSessionResume)
                 {
-                    await disconnectHandler.AllowSessionResumeAsync(actor, loginHandler, _gracePeriod);
+                    await disconnectHandler.AllowSessionResumeAsync(actor, loginHandler);
                 }
                 else
                 {
@@ -120,5 +161,30 @@ public class InactivityScanner(
 
         // Gateway 소켓 해제를 대기열에 예약
         disconnectQueue.Schedule(sessionId, gatewayNodeId);
+    }
+
+    private async Task ExpireGracePeriodAsync(ISessionActor actor)
+    {
+        var sessionId = actor.ActorId;
+
+        try
+        {
+            await actor.ExecuteAsync(async _ =>
+            {
+                if (actor.Status != ActorState.Disconnected)
+                    return;
+
+                using var scope = scopeFactory.CreateScope();
+                var loginHandler = scope.ServiceProvider.GetRequiredService<ILoginHandler>();
+
+                await disconnectHandler.ExpireGracePeriodAsync(actor, loginHandler);
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Failed to expire grace period via mailbox: SessionId={SessionId}",
+                sessionId);
+        }
     }
 }

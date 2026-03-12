@@ -358,12 +358,14 @@ internal class MockActor : ISessionActor
 
     public long LastActivityTicks => Environment.TickCount64;
 
+    public long DisconnectedTicks { get; private set; }
+
     public void TouchActivity() { }
 
-    public void StartGracePeriod(TimeSpan duration, Func<Task> onExpired) { }
+    public void MarkDisconnected() { DisconnectedTicks = Environment.TickCount64; }
 
-    public void CancelGracePeriod() { }
-   
+    public void ClearDisconnected() { DisconnectedTicks = 0; }
+
     public Task ExecuteAsync(Func<IServiceProvider, Task> action) => Task.CompletedTask;
 
     public virtual void Dispose()

@@ -18,7 +18,7 @@ namespace SimpleNetEngine.Tests.Game.Core;
 
 /// <summary>
 /// ConnectionController.HandleClientDisconnected 유닛 테스트
-/// - Active Actor: Disconnected 상태 전이 + OnDisconnectedAsync Hook
+/// - Active Actor: Disconnected 상태 전이 + OnDisconnectedAsync Hook + MarkDisconnected
 /// - Created/Authenticating Actor: 즉시 제거
 /// </summary>
 public class ConnectionControllerDisconnectTests
@@ -46,7 +46,6 @@ public class ConnectionControllerDisconnectTests
             _actorManagerMock.Object,
             new ActorDisposeQueue(NullLogger<ActorDisposeQueue>.Instance),
             _sessionStoreMock.Object,
-            Mock.Of<IServiceScopeFactory>(),
             NullLogger<ActorDisconnectHandler>.Instance);
 
         _sut = new ConnectionController(
@@ -59,7 +58,6 @@ public class ConnectionControllerDisconnectTests
             Mock.Of<IMessageDispatcher>(),
             Mock.Of<IServiceScopeFactory>(),
             new MiddlewarePipelineFactory(Mock.Of<ILogger<MiddlewarePipeline>>()),
-            options,
             null!); // GameSessionChannelListener은 HandleClientDisconnected에서 미사용
     }
 
@@ -70,7 +68,6 @@ public class ConnectionControllerDisconnectTests
         var actorMock = new Mock<ISessionActor>();
         actorMock.SetupProperty(a => a.Status, ActorState.Active);
         actorMock.Setup(a => a.UserId).Returns(42L);
-        actorMock.Setup(a => a.StartGracePeriod(It.IsAny<TimeSpan>(), It.IsAny<Func<Task>>()));
 
         // ExecuteAsync가 콜백을 실행하도록 설정 (actor mailbox 시뮬레이션)
         actorMock
@@ -98,12 +95,10 @@ public class ConnectionControllerDisconnectTests
         _loginHandlerMock.Verify(
             x => x.OnDisconnectedAsync(actorMock.Object), Times.Once);
 
-        // Grace Period 타이머 시작됨
-        actorMock.Verify(
-            a => a.StartGracePeriod(It.IsAny<TimeSpan>(), It.IsAny<Func<Task>>()),
-            Times.Once);
+        // MarkDisconnected 호출됨 (타임스탬프 기록)
+        actorMock.Verify(a => a.MarkDisconnected(), Times.Once);
 
-        // Actor 제거되지 않음 (Grace Period 대기)
+        // Actor 제거되지 않음 (InactivityScanner가 Grace Period 만료 시 처리)
         _actorManagerMock.Verify(x => x.RemoveActor(It.IsAny<long>()), Times.Never);
     }
 

@@ -163,7 +163,7 @@ public class ReconnectControllerTests
 
         // Actor 복원됨
         existingActorMock.Object.Status.Should().Be(ActorState.Active);
-        existingActorMock.Verify(a => a.CancelGracePeriod(), Times.Once);
+        existingActorMock.Verify(a => a.ClearDisconnected(), Times.Once);
         existingActorMock.Verify(a => a.UpdateRouting(GatewayNodeId), Times.Once);
         existingActorMock.Verify(a => a.RegenerateReconnectKey(), Times.Once);
 

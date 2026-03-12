@@ -119,8 +119,8 @@ public class ReconnectController(
             });
         }
 
-        // Grace Period 취소
-        existingActor.CancelGracePeriod();
+        // Disconnected 타임스탬프 초기화
+        existingActor.ClearDisconnected();
 
         // 라우팅 정보 갱신 (새 Gateway/TCP 연결)
         existingActor.UpdateRouting(tempActor.GatewayNodeId);
