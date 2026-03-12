@@ -5,7 +5,6 @@ Console.InputEncoding = System.Text.Encoding.UTF8;
 
 
 
-
 var builder = DistributedApplication.CreateBuilder(args);
 
 #pragma warning disable ASPIRECERTIFICATES001
