@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package proto.test;
+
+// ===== Test Messages for Unit Testing =====
+ 
+// 에코 요청 (테스트용)
+message EchoReq
+{
+    string message = 1;         // 에코할 메시지
+    int32 timestamp = 2;        // 타임스탬프
+}
+
+// 에코 응답
+message EchoRes
+{
+    string message = 1;         // 에코된 메시지
+    int32 timestamp = 2;        // 타임스탬프
+}
+ 
+message TestReq
+{
+  string message = 1;
+}
+
+message TestRes
+{
+  string message = 2;
+}

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package internal.protocol;
+
+
+
+enum EServerType
+{
+  EServerType_None = 0;
+  EServerType_Gateway = 1;
+  EServerType_Game = 2;
+  EServerType_Api = 3;
+}

@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>SimpleNetEngine.Gateway</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SimpleNetEngine.Protocol\SimpleNetEngine.Protocol.csproj" />
+    <ProjectReference Include="..\SimpleNetEngine.Infrastructure\SimpleNetEngine.Infrastructure.csproj" />
+    <ProjectReference Include="..\SimpleNetEngine.Node\SimpleNetEngine.Node.csproj" />
+    <ProjectReference Include="..\SimpleNetEngine.ProtoGenerator\SimpleNetEngine.ProtoGenerator.csproj" />
+    <ProjectReference Include="..\PacketParserGenerator\PacketParserGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NetCoreServer" />
+    <PackageReference Include="K4os.Compression.LZ4" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package proto.test;
+
+// ===== Test Messages for Unit Testing =====
+ 
+// 에코 요청 (테스트용)
+message EchoReq
+{
+    string message = 1;         // 에코할 메시지
+    int32 timestamp = 2;        // 타임스탬프
+}
+
+// 에코 응답
+message EchoRes
+{
+    string message = 1;         // 에코된 메시지
+    int32 timestamp = 2;        // 타임스탬프
+}
+
+// Handshake 요청 (클라이언트 → Gateway)
+// TCP 접속 이후 최초로 보내는 패킷. 이 패킷을 받아야 GameServer가 익명 Actor를 생성함.
+message HandshakeReq
+{
+  // 향후 클라이언트가 제안하는 암호화 알고리즘 버전 정보 등 추가 예정
+}
+
+// Handshake + 익명 Actor 할당 통합 응답
+message HandshakeRes
+{
+  int64 SessionId = 1;          // GameServer 측 발급 (익명 ActorId 겸용)
+  string ReconnectKey = 2;      // GameServer 측 발급
+  bytes SymmetricKey = 3;       // Gateway 측 발급 (대칭키)
+}
+
+// 에코 요청 (테스트용)
+message Echo2Req
+{
+  string message = 1;         // 에코할 메시지
+  int32 timestamp = 2;        // 타임스탬프
+}
+
+// 에코 응답
+message Echo2Res
+{
+  string message = 1;         // 에코된 메시지
+  int32 timestamp = 2;        // 타임스탬프
+}
+
+ 
+message TestReq
+{
+  string message = 1;
+}
+
+message TestRes
+{
+  string message = 2;
+}
+
+
+message StopReq
+{
+  
+}
+
+message StopRes
+{
+  
+}

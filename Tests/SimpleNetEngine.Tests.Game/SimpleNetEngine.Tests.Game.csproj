@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Moq" />
+    <PackageReference Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SimpleNetEngine.Protocol\SimpleNetEngine.Protocol.csproj" />
+    <ProjectReference Include="..\..\SimpleNetEngine.Infrastructure\SimpleNetEngine.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\SimpleNetEngine.Game\SimpleNetEngine.Game.csproj" />
+    <ProjectReference Include="..\..\SimpleNetEngine.Node\SimpleNetEngine.Node.csproj" />
+    <ProjectReference Include="..\..\SimpleNetEngine.ProtoGenerator\SimpleNetEngine.ProtoGenerator.csproj" />
+    <ProjectReference Include="..\Tests.Protocol\Tests.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>

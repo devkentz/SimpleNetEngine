@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package game.protocol;
+
+// Handshake 요청 (클라이언트 → Gateway → GameServer)
+// TCP 접속 이후 최초로 보내는 패킷. 이 패킷을 받아야 GameServer가 익명 Actor를 생성함.
+message HandshakeReq {
+  bytes client_ephemeral_public_key = 1; // ECDH P-256 공개키 (DER)
+}
+
+// Handshake 응답
+// SessionId는 Gateway가 OnConnected 시점에 이미 발급하여 라우팅에 사용 중이므로 포함하지 않음
+// ReconnectKey는 LoginGameRes(암호화)로 전달
+message HandshakeRes {
+  bytes server_ephemeral_public_key = 3;       // Gateway ECDH P-256 공개키 (DER) — 클라이언트가 SharedSecret 도출에 사용
+  bytes server_ephemeral_signature = 4;        // ECDSA P-256 서명 (Gateway 장기 서명키로 ECDH 공개키에 서명) — MITM 방지
+}
+
+// 로그인 요청 (credential은 앱 정의 protobuf 메시지의 직렬화 바이트)
+message LoginGameReq {
+  bytes credential = 1;
+}
+
+// 로그인 응답 (암호화 채널로 전송 — ReconnectKey 포함)
+message LoginGameRes {
+  bool Success = 1;
+  string ErrorMessage = 3;
+  string ReconnectKey = 4;
+}
+
+// 재접속 요청 (클라이언트 → GameServer, Authenticating 상태에서)
+message ReconnectReq {
+  string ReconnectKey = 1;
+  int64 LastSequenceId = 2;
+}
+
+// 재접속 응답
+message ReconnectRes {
+  bool Success = 1;
+  string NewReconnectKey = 3;
+  string ErrorMessage = 4;
+  bool RequiresRetry = 5;       // true면 클라이언트가 ReconnectReq를 재전송해야 함 (Cross-Node Re-route)
+}
+
+// GameServer → Client: Actor 생성 완료 알림 (GSC 경유)
+// 클라이언트는 이 메시지를 수신한 후 HandshakeReq를 전송해야 함
+message ReadyToHandshakeNtf {
+}
+
+// 로그아웃 요청 (클라이언트 → GameServer, Active 상태에서만)
+message LogoutReq {
+}
+
+// 로그아웃 응답
+message LogoutRes {
+  bool Success = 1;
+}
+
+// Heartbeat — Gateway 주도 (I/O 레벨 liveness 체크)
+// Gateway가 주기적으로 PingReq 전송, 클라이언트가 PongRes 응답
+// PongTimeout 내 미응답 → TCP 강제 종료
+message PingReq {
+  int64 Timestamp = 1;
+}
+
+message PongRes {
+  int64 Timestamp = 1;
+}
+
+// 범용 에러 응답
+message ErrorRes {
+  int32 ErrorCode = 1;
+  string ErrorMessage = 2;
+}

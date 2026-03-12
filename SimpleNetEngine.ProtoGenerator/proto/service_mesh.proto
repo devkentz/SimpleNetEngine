@@ -1,0 +1,95 @@
+syntax = "proto3";
+package internal.protocol;
+
+// GameServer 간 Service Mesh RPC 메시지
+
+message ServiceMeshKickoutReq {
+    int64 user_id = 1;
+    int64 session_id = 2;
+    int64 gateway_node_id = 3;
+}
+
+message ServiceMeshKickoutRes {
+    int64 user_id = 1;
+    bool success = 2;
+    ServiceMeshKickoutErrorCode error_code = 3;
+}
+
+enum ServiceMeshKickoutErrorCode {
+    ServiceMeshKickoutErrorCode_Success = 0;
+    ServiceMeshKickoutErrorCode_UserNotFound = 1;
+    ServiceMeshKickoutErrorCode_SessionMismatch = 2;
+    ServiceMeshKickoutErrorCode_AlreadyDisconnected = 3;
+    ServiceMeshKickoutErrorCode_InternalError = 255;
+}
+
+// ---------------------------------------------------------
+// Gateway ↔ GameServer Control RPC (Node Service Mesh 전용)
+// ---------------------------------------------------------
+
+message ServiceMeshDisconnectClientReq {
+    int64 gateway_node_id = 1;
+    int64 session_id = 2;
+}
+
+message ServiceMeshDisconnectClientRes {
+    bool success = 1;
+}
+
+message ServiceMeshRerouteSocketReq {
+    int64 gateway_node_id = 1;
+    int64 session_id = 2;
+    int64 target_node_id = 3;
+}
+
+message ServiceMeshRerouteSocketRes {
+    bool success = 1;
+}
+
+// ---------------------------------------------------------
+// Gateway → GameServer: 신규 클라이언트 접속 알림 (Node RPC)
+// Gateway.OnConnected 시 호출. Gateway가 SessionId를 발급하여 전달.
+// GameServer는 전달받은 SessionId로 Actor를 생성.
+// ---------------------------------------------------------
+
+message ServiceMeshNewUserNtfReq {
+    int64 gateway_node_id = 1;
+    int64 session_id = 2;  // Gateway가 발급한 SessionId
+    bytes gateway_ephemeral_public_key = 3;  // ECDH P-256 공개키 (DER)
+    bytes gateway_ephemeral_signature = 4;   // ECDSA P-256 서명 (ECDH 공개키에 대한 서명)
+    bool is_reroute = 5;   // Cross-node reconnect: Authenticating 상태로 직접 생성 (Handshake 스킵)
+}
+
+message ServiceMeshNewUserNtfRes {
+    bool success = 1;
+}
+
+// ---------------------------------------------------------
+// GameServer → Gateway: 암호화 활성화 요청 (Node RPC)
+// HandshakeReq 처리 시 클라이언트의 ECDH 공개키를 Gateway에 전달
+// Gateway는 SharedSecret을 도출하고 AES-GCM 암호화를 활성화
+// ---------------------------------------------------------
+
+message ServiceMeshActivateEncryptionReq {
+    int64 session_id = 1;
+    bytes client_ephemeral_public_key = 2;  // 클라이언트 ECDH P-256 공개키 (DER)
+}
+
+message ServiceMeshActivateEncryptionRes {
+    bool success = 1;
+}
+
+// ---------------------------------------------------------
+// Gateway → GameServer: 클라이언트 TCP 연결 종료 알림 (Node RPC)
+// Gateway.OnDisconnected 시 fire-and-forget으로 호출.
+// GameServer는 해당 SessionId의 Actor를 제거합니다.
+// ---------------------------------------------------------
+
+message ServiceMeshClientDisconnectedNtfReq {
+    int64 session_id = 1;
+    int64 gateway_node_id = 2;
+}
+
+message ServiceMeshClientDisconnectedNtfRes {
+    bool success = 1;
+}

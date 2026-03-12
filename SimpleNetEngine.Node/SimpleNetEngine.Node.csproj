@@ -1,0 +1,59 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AssemblyVersion>0.1</AssemblyVersion>
+        <FileVersion>0.1</FileVersion>
+        <RootNamespace>SimpleNetEngine.Node</RootNamespace>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+
+    <ItemGroup>
+        <!-- NetworkCommon dependencies -->
+        <PackageReference Include="CoreWCF.Primitives" />
+        <PackageReference Include="K4os.Compression.LZ4" />
+        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+
+        <!-- NetworkServer dependencies -->
+        <PackageReference Include="Microsoft.EntityFrameworkCore" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" PrivateAssets="All" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="All" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+        <PackageReference Include="Microsoft.Extensions.Configuration" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" />
+        <PackageReference Include="Microsoft.Extensions.Logging" />
+        <PackageReference Include="Microsoft.IdentityModel.Tokens" />
+        <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
+        <PackageReference Include="NetMQ" />
+        <PackageReference Include="Newtonsoft.Json" />
+        <PackageReference Include="Serilog" />
+        <PackageReference Include="Serilog.Extensions.Logging" />
+        <PackageReference Include="Serilog.Settings.Configuration" />
+        <PackageReference Include="Serilog.Sinks.File" />
+        <PackageReference Include="StackExchange.Redis" />
+        <PackageReference Include="System.Collections.Concurrent" />
+        <PackageReference Include="System.Formats.Asn1" />
+        <PackageReference Include="System.IO.Hashing" />
+        <PackageReference Include="System.Security.Cryptography.Pkcs" />
+        <PackageReference Include="System.Text.Encodings.Web" />
+        <PackageReference Include="System.Text.Json" />
+        <PackageReference Include="System.Text.RegularExpressions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SimpleNetEngine.Protocol\SimpleNetEngine.Protocol.csproj" />
+        <ProjectReference Include="..\SimpleNetEngine.Infrastructure\SimpleNetEngine.Infrastructure.csproj" />
+        <ProjectReference Include="..\SimpleNetEngine.ProtoGenerator\SimpleNetEngine.ProtoGenerator.csproj" />
+<!--        <ProjectReference Include="..\PacketParserGenerator\PacketParserGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />-->
+    </ItemGroup>
+
+    <ItemGroup>
+        <Reference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    </ItemGroup>
+
+</Project>
