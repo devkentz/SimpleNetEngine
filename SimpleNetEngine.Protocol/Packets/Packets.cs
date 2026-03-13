@@ -14,7 +14,7 @@ public class NodePacket : IDisposable
     public NodeHeader Header;
     public Msg Msg;
 
-    public Span<byte> Payload => Msg.Slice(NodeHeader.Size, Msg.Size - NodeHeader.Size);
+    public Span<byte> Payload => Msg.Slice(NodeHeader.SizeOf, Msg.Size - NodeHeader.SizeOf);
 
     private NodePacket() {}
 
@@ -32,7 +32,7 @@ public class NodePacket : IDisposable
         int payloadLen = message.CalculateSize();
 
         var packet = new NodePacket();
-        packet.Msg.InitPool(NodeHeader.Size + payloadLen);
+        packet.Msg.InitPool(NodeHeader.SizeOf + payloadLen);
 
         packet.Header = new NodeHeader
         {
@@ -44,8 +44,8 @@ public class NodePacket : IDisposable
             MsgId = msgId
         };
 
-        MemoryMarshal.Write(packet.Msg.Slice(0, NodeHeader.Size), in packet.Header);
-        message.WriteTo(packet.Msg.Slice(NodeHeader.Size, payloadLen));
+        MemoryMarshal.Write(packet.Msg.Slice(0, NodeHeader.SizeOf), in packet.Header);
+        message.WriteTo(packet.Msg.Slice(NodeHeader.SizeOf, payloadLen));
         return packet;
     }
 
@@ -54,7 +54,7 @@ public class NodePacket : IDisposable
     /// </summary>
     public void WriteHeader()
     {
-        MemoryMarshal.Write(Msg.Slice(0, NodeHeader.Size), in Header);
+        MemoryMarshal.Write(Msg.Slice(0, NodeHeader.SizeOf), in Header);
     }
 
     public void Dispose()
