@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Runtime.InteropServices;
 using Google.Protobuf;
 using SimpleNetEngine.Protocol.Packets;
 
@@ -17,24 +16,19 @@ public static class PacketHelper
     /// </summary>
     public static (GameHeader header, IMessage message) ParseClientPacket(ReadOnlySpan<byte> span, MessageParser parser)
     {
-        if (span.Length < EndPointHeader.Size + GameHeader.Size)
+        if (!NetHeaderHelper.TryRead<EndPointHeader>(span, out var endPointHeader))
             throw new InvalidOperationException($"Payload too small: {span.Length} bytes");
 
-        int offset = 0;
-        var totalSize = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
-        if(span.Length < totalSize)
+        if(span.Length < endPointHeader.TotalLength)
             throw new InvalidOperationException($"Payload too small: {span.Length} bytes");
 
-        // EndPointHeader
-        var endPointHeader = MemoryMarshal.Read<EndPointHeader>(span[offset..]);
-        offset += EndPointHeader.Size;
+        var afterEp = NetHeaderHelper.GetPayload<EndPointHeader>(span);
 
-        // GameHeader
-        var header = MemoryMarshal.Read<GameHeader>(span[offset..]);
-        offset += GameHeader.Size;
+        if (!NetHeaderHelper.TryRead<GameHeader>(afterEp, out var header))
+            throw new InvalidOperationException($"Payload too small: {span.Length} bytes");
 
         // 나머지는 Protobuf payload
-        var protoPayload = span[offset..];
+        var protoPayload = NetHeaderHelper.GetPayload<GameHeader>(afterEp);
         var message = parser.ParseFrom(protoPayload);
 
         return (header, message);

@@ -46,7 +46,7 @@ public class PacketEncryptorTests : IDisposable
         encLen.Should().Be(packet.Length + PacketEncryptor.TagSize, "암호화 후 Tag(16B) 추가");
 
         // 암호화된 헤더 검증
-        var encHeader = EndPointHeader.Read(encBuf.AsSpan(0, encLen));
+        var encHeader = MemoryMarshal.Read<EndPointHeader>(encBuf.AsSpan(0, encLen));
         encHeader.IsEncrypted.Should().BeTrue();
 
         // 복호화
@@ -57,12 +57,12 @@ public class PacketEncryptorTests : IDisposable
         decrypted.Should().BeTrue();
 
         // 원본 GameHeader + Payload 복원 검증
-        var originalData = packet.AsSpan(EndPointHeader.Size);
-        var restoredData = decBuf.AsSpan(EndPointHeader.Size, decLen - EndPointHeader.Size);
+        var originalData = packet.AsSpan(EndPointHeader.SizeOf);
+        var restoredData = decBuf.AsSpan(EndPointHeader.SizeOf, decLen - EndPointHeader.SizeOf);
         restoredData.ToArray().Should().BeEquivalentTo(originalData.ToArray());
 
         // 복호화된 헤더: FlagEncrypted 제거
-        var decHeader = EndPointHeader.Read(decBuf.AsSpan(0, decLen));
+        var decHeader = MemoryMarshal.Read<EndPointHeader>(decBuf.AsSpan(0, decLen));
         decHeader.IsEncrypted.Should().BeFalse();
 
         PacketEncryptor.ReturnBuffer(encBuf);
@@ -76,7 +76,7 @@ public class PacketEncryptorTests : IDisposable
     public void TryEncrypt_HandshakePacket_ReturnsFalse()
     {
         var packet = CreatePacket(128);
-        var header = EndPointHeader.Read(packet);
+        var header = MemoryMarshal.Read<EndPointHeader>(packet);
         header.Flags = EndPointHeader.FlagHandshake;
         header.Write(packet.AsSpan());
 
@@ -95,7 +95,7 @@ public class PacketEncryptorTests : IDisposable
     [Fact]
     public void TryEncrypt_TooSmallPacket_ReturnsFalse()
     {
-        var tiny = new byte[EndPointHeader.Size - 1];
+        var tiny = new byte[EndPointHeader.SizeOf - 1];
         ulong counter = 0;
 
         var result = PacketEncryptor.TryEncrypt(
@@ -112,7 +112,7 @@ public class PacketEncryptorTests : IDisposable
     [Fact]
     public void TryDecrypt_TooSmallPayload_ReturnsFalse()
     {
-        var tiny = new byte[EndPointHeader.Size + PacketEncryptor.TagSize - 1];
+        var tiny = new byte[EndPointHeader.SizeOf + PacketEncryptor.TagSize - 1];
         ulong counter = 0;
 
         var result = PacketEncryptor.TryDecrypt(
@@ -138,7 +138,7 @@ public class PacketEncryptorTests : IDisposable
             out var encBuf, out var encLen);
 
         // Ciphertext 변조 (Tag 이후 첫 바이트 플립)
-        encBuf![EndPointHeader.Size + PacketEncryptor.TagSize] ^= 0xFF;
+        encBuf![EndPointHeader.SizeOf + PacketEncryptor.TagSize] ^= 0xFF;
 
         var result = PacketEncryptor.TryDecrypt(
             encBuf.AsSpan(0, encLen), _decryptAesGcm, ref decCounter, PacketEncryptor.DirectionS2C,
@@ -203,7 +203,7 @@ public class PacketEncryptorTests : IDisposable
     public void Encrypt_PreservesErrorCode()
     {
         var packet = CreatePacket(128);
-        var header = EndPointHeader.Read(packet);
+        var header = MemoryMarshal.Read<EndPointHeader>(packet);
         header.ErrorCode = 42;
         header.Write(packet.AsSpan());
 
@@ -211,11 +211,11 @@ public class PacketEncryptorTests : IDisposable
         ulong decCounter = 0;
 
         PacketEncryptor.TryEncrypt(packet, _encryptAesGcm, ref encCounter, PacketEncryptor.DirectionS2C, out var encBuf, out var encLen);
-        var encHeader = EndPointHeader.Read(encBuf.AsSpan(0, encLen));
+        var encHeader = MemoryMarshal.Read<EndPointHeader>(encBuf.AsSpan(0, encLen));
         encHeader.ErrorCode.Should().Be(42);
 
         PacketEncryptor.TryDecrypt(encBuf.AsSpan(0, encLen), _decryptAesGcm, ref decCounter, PacketEncryptor.DirectionS2C, out var decBuf, out var decLen);
-        var decHeader = EndPointHeader.Read(decBuf.AsSpan(0, decLen));
+        var decHeader = MemoryMarshal.Read<EndPointHeader>(decBuf.AsSpan(0, decLen));
         decHeader.ErrorCode.Should().Be(42);
 
         PacketEncryptor.ReturnBuffer(encBuf);
@@ -244,7 +244,7 @@ public class PacketEncryptorTests : IDisposable
         encrypted.Should().BeTrue();
 
         // 플래그 검증: Compressed | Encrypted
-        var encHeader = EndPointHeader.Read(encBuf.AsSpan(0, encLen));
+        var encHeader = MemoryMarshal.Read<EndPointHeader>(encBuf.AsSpan(0, encLen));
         encHeader.IsCompressed.Should().BeTrue();
         encHeader.IsEncrypted.Should().BeTrue();
 
@@ -255,7 +255,7 @@ public class PacketEncryptorTests : IDisposable
         decrypted.Should().BeTrue();
 
         // 복호화 후: Compressed만 남음
-        var decHeader = EndPointHeader.Read(decBuf.AsSpan(0, decLen));
+        var decHeader = MemoryMarshal.Read<EndPointHeader>(decBuf.AsSpan(0, decLen));
         decHeader.IsCompressed.Should().BeTrue();
         decHeader.IsEncrypted.Should().BeFalse();
 
@@ -265,8 +265,8 @@ public class PacketEncryptorTests : IDisposable
         decompressed.Should().BeTrue();
 
         // 원본 GameHeader + Payload 복원 검증
-        var originalData = packet.AsSpan(EndPointHeader.Size);
-        var restoredData = decompBuf.AsSpan(EndPointHeader.Size, decompLen - EndPointHeader.Size);
+        var originalData = packet.AsSpan(EndPointHeader.SizeOf);
+        var restoredData = decompBuf.AsSpan(EndPointHeader.SizeOf, decompLen - EndPointHeader.SizeOf);
         restoredData.ToArray().Should().BeEquivalentTo(originalData.ToArray());
 
         PacketCompressor.ReturnBuffer(compBuf);
@@ -301,7 +301,7 @@ public class PacketEncryptorTests : IDisposable
         MemoryMarshal.Write(packet.AsSpan(), in header);
 
         var gameHeader = new GameHeader { MsgId = 1, SequenceId = 1 };
-        gameHeader.Write(packet.AsSpan(EndPointHeader.Size));
+        gameHeader.Write(packet.AsSpan(EndPointHeader.SizeOf));
 
         return packet;
     }
@@ -314,9 +314,9 @@ public class PacketEncryptorTests : IDisposable
         MemoryMarshal.Write(packet.AsSpan(), in header);
 
         var gameHeader = new GameHeader { MsgId = 1, SequenceId = 1 };
-        gameHeader.Write(packet.AsSpan(EndPointHeader.Size));
+        gameHeader.Write(packet.AsSpan(EndPointHeader.SizeOf));
 
-        var payloadStart = EndPointHeader.Size + GameHeader.Size;
+        var payloadStart = EndPointHeader.SizeOf + GameHeader.SizeOf;
         for (var i = payloadStart; i < totalSize; i++)
             packet[i] = (byte)(i % 4);
 

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.InteropServices;
 using K4os.Compression.LZ4;
 using SimpleNetEngine.Protocol.Packets;
 
@@ -32,39 +33,37 @@ public static class PacketCompressor
         compressedLength = 0;
 
         // EndPointHeader 읽기
-        if (payload.Length < EndPointHeader.Size + GameHeader.Size)
+        if (!NetHeaderHelper.TryRead<EndPointHeader>(payload, out var endPointHeader))
             return false;
-
-        var endPointHeader = EndPointHeader.Read(payload);
 
         // Handshake 패킷은 압축하지 않음
         if (endPointHeader.IsHandshake)
             return false;
 
         // GameHeader + Payload 추출 (EndPointHeader 이후)
-        var gameData = payload[EndPointHeader.Size..];
+        var gameData = NetHeaderHelper.GetPayload<EndPointHeader>(payload);
+
+        if (!NetHeaderHelper.HasHeader<GameHeader>(gameData))
+            return false;
 
         // 임계값 미만이면 스킵
         if (gameData.Length < compressionThreshold)
             return false;
 
         // LZ4 압축
-        var maxCompressedSize = LZ4Codec.MaximumOutputSize(gameData.Length);
-        var tempBuffer = ArrayPool<byte>.Shared.Rent(maxCompressedSize);
+        var maxCompressedSize = EndPointHeader.SizeOf + LZ4Codec.MaximumOutputSize(gameData.Length);
+        compressedBuffer = ArrayPool<byte>.Shared.Rent(maxCompressedSize);
 
         try
         {
-            var encodedSize = LZ4Codec.Encode(gameData, tempBuffer.AsSpan());
+            var encodedSize = LZ4Codec.Encode(gameData, compressedBuffer.AsSpan(EndPointHeader.SizeOf));
             if (encodedSize <= 0 || encodedSize >= gameData.Length)
             {
-                // 압축 실패 또는 압축 후 더 커지면 스킵
-                ArrayPool<byte>.Shared.Return(tempBuffer);
                 return false;
             }
 
             // 최종 패킷 구성: [EndPointHeader(OriginalLength 포함)][LZ4Data]
-            var totalSize = EndPointHeader.Size + encodedSize;
-            compressedBuffer = ArrayPool<byte>.Shared.Rent(totalSize);
+            var totalSize = EndPointHeader.SizeOf + encodedSize;
             compressedLength = totalSize;
 
             var outSpan = compressedBuffer.AsSpan();
@@ -77,16 +76,15 @@ public static class PacketCompressor
                 Flags = (byte)(endPointHeader.Flags | EndPointHeader.FlagCompressed),
                 OriginalLength = gameData.Length
             };
+            
             newHeader.Write(outSpan);
-
-            // LZ4 데이터 복사
-            tempBuffer.AsSpan(0, encodedSize).CopyTo(outSpan[EndPointHeader.Size..]);
-
             return true;
         }
-        finally
+        catch
         {
-            ArrayPool<byte>.Shared.Return(tempBuffer);
+            ArrayPool<byte>.Shared.Return(compressedBuffer);
+            compressedBuffer = null;
+            return false;
         }
     }
 
@@ -105,19 +103,17 @@ public static class PacketCompressor
         decompressedBuffer = null;
         decompressedLength = 0;
 
-        if (payload.Length < EndPointHeader.Size)
+        if (!NetHeaderHelper.TryRead<EndPointHeader>(payload, out var endPointHeader))
             return false;
-
-        var endPointHeader = EndPointHeader.Read(payload);
 
         // OriginalLength 검증
         if (endPointHeader.OriginalLength <= 0 || endPointHeader.OriginalLength > 1024 * 1024) // 1MB 상한
             return false;
 
-        var compressedData = payload[EndPointHeader.Size..];
+        var compressedData = NetHeaderHelper.GetPayload<EndPointHeader>(payload);
 
         // 해제 버퍼 할당: [EndPointHeader] + [원본 GameHeader + Payload]
-        var totalSize = EndPointHeader.Size + endPointHeader.OriginalLength;
+        var totalSize = EndPointHeader.SizeOf + endPointHeader.OriginalLength;
         decompressedBuffer = ArrayPool<byte>.Shared.Rent(totalSize);
         decompressedLength = totalSize;
 
@@ -134,7 +130,7 @@ public static class PacketCompressor
         newHeader.Write(outSpan);
 
         // LZ4 해제
-        var decodedSize = LZ4Codec.Decode(compressedData, outSpan[EndPointHeader.Size..]);
+        var decodedSize = LZ4Codec.Decode(compressedData, outSpan[EndPointHeader.SizeOf..]);
         if (decodedSize != endPointHeader.OriginalLength)
         {
             ArrayPool<byte>.Shared.Return(decompressedBuffer);

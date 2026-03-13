@@ -91,7 +91,8 @@ public class ConnectionController(
                 gatewayNodeId,
                 sessionId,
                 Response.Ok(new ReadyToHandshakeNtf()),
-                requestId: 0);
+                requestId: 0,
+                sequenceId: (ushort)actor.NextSequenceId());
 
             logger.LogInformation(
                 "ReadyToHandshakeNtf sent via GSC: SessionId={SessionId}, Gateway={GatewayNodeId}",

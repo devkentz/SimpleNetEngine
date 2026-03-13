@@ -21,17 +21,17 @@ public class PacketHelperTests
         var protoBytes = testMessage.ToByteArray();
 
         // Build wire format: [EndPointHeader(4)][GameHeader(8)][Payload...]
-        var totalSize = EndPointHeader.Size + GameHeader.Size + protoBytes.Length;
+        var totalSize = EndPointHeader.SizeOf + GameHeader.SizeOf + protoBytes.Length;
         var buffer = new byte[totalSize];
 
         var offset = 0;
         var endPointHeader = new EndPointHeader { TotalLength = totalSize };
         MemoryMarshal.Write(buffer.AsSpan(offset), in endPointHeader);
-        offset += EndPointHeader.Size;
+        offset += EndPointHeader.SizeOf;
 
         var gameHeader = new GameHeader { MsgId = msgId, SequenceId = msgSeq };
         MemoryMarshal.Write(buffer.AsSpan(offset), in gameHeader);
-        offset += GameHeader.Size;
+        offset += GameHeader.SizeOf;
 
         protoBytes.CopyTo(buffer, offset);
 
@@ -48,7 +48,7 @@ public class PacketHelperTests
     public void ParseClientPacket_PacketTooSmall_ShouldThrowException()
     {
         // Arrange
-        var buffer = new byte[EndPointHeader.Size + GameHeader.Size - 1];
+        var buffer = new byte[EndPointHeader.SizeOf + GameHeader.SizeOf - 1];
 
         // Act
         Action act = () => PacketHelper.ParseClientPacket(buffer, EchoReq.Parser);

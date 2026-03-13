@@ -35,11 +35,17 @@ public class ExceptionHandlingMiddleware(ILogger<ExceptionHandlingMiddleware> lo
             // Zero-Copy 응답 전송
             if (context.SendResponse != null)
             {
+                // Actor가 있으면 NextSequenceId 발급, 없으면 0
+                ushort seqId = 0;
+                if (context.Items.TryGetValue("Actor", out var actorObj) && actorObj is Actor.SessionActor actor)
+                    seqId = (ushort)actor.NextSequenceId();
+
                 context.SendResponse(
                     context.GatewayNodeId,
                     context.SessionId,
                     context.Response,
-                    context.RequestId);
+                    context.RequestId,
+                    seqId);
             }
 
             context.IsCompleted = true;

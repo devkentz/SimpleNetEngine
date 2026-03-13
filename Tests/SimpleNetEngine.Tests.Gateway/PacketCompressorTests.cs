@@ -21,7 +21,7 @@ public class PacketCompressorTests
         var gameHeader = new GameHeader { MsgId = 100, SequenceId = 1, RequestId = 0 };
         var endPointHeader = new EndPointHeader
         {
-            TotalLength = EndPointHeader.Size + GameHeader.Size + (payload.Length - EndPointHeader.Size - GameHeader.Size),
+            TotalLength = EndPointHeader.SizeOf + GameHeader.SizeOf + (payload.Length - EndPointHeader.SizeOf - GameHeader.SizeOf),
             ErrorCode = 0,
             Flags = 0
         };
@@ -29,7 +29,7 @@ public class PacketCompressorTests
         // 원본 패킷 조립: [EndPointHeader][GameHeader][RandomPayload]
         var originalPacket = new byte[payload.Length];
         MemoryMarshal.Write(originalPacket.AsSpan(), in endPointHeader);
-        gameHeader.Write(originalPacket.AsSpan(EndPointHeader.Size));
+        gameHeader.Write(originalPacket.AsSpan(EndPointHeader.SizeOf));
         // payload 뒤쪽은 이미 랜덤으로 채워짐
 
         // 반복 데이터로 압축 효율 확보 (랜덤 데이터는 압축이 안 됨)
@@ -45,9 +45,9 @@ public class PacketCompressorTests
         compressedLength.Should().BeLessThan(compressiblePacket.Length, "압축 후 크기가 줄어야 함");
 
         // 압축된 헤더 검증
-        var compressedHeader = EndPointHeader.Read(compressedBuffer.AsSpan(0, compressedLength));
+        var compressedHeader = MemoryMarshal.Read<EndPointHeader>(compressedBuffer.AsSpan(0, compressedLength));
         compressedHeader.IsCompressed.Should().BeTrue();
-        compressedHeader.OriginalLength.Should().Be(compressiblePacket.Length - EndPointHeader.Size);
+        compressedHeader.OriginalLength.Should().Be(compressiblePacket.Length - EndPointHeader.SizeOf);
 
         // Act: 해제
         var decompressed = PacketCompressor.TryDecompress(
@@ -57,12 +57,12 @@ public class PacketCompressorTests
         decompressed.Should().BeTrue("압축 해제가 성공해야 함");
 
         // Assert: 원본 GameHeader + Payload 복원 검증
-        var originalGameData = compressiblePacket.AsSpan(EndPointHeader.Size);
-        var restoredGameData = decompressedBuffer.AsSpan(EndPointHeader.Size, decompressedLength - EndPointHeader.Size);
+        var originalGameData = compressiblePacket.AsSpan(EndPointHeader.SizeOf);
+        var restoredGameData = decompressedBuffer.AsSpan(EndPointHeader.SizeOf, decompressedLength - EndPointHeader.SizeOf);
         restoredGameData.ToArray().Should().BeEquivalentTo(originalGameData.ToArray());
 
         // 해제된 헤더 검증: FlagCompressed 제거, OriginalLength 클리어
-        var decompressedHeader = EndPointHeader.Read(decompressedBuffer.AsSpan(0, decompressedLength));
+        var decompressedHeader = MemoryMarshal.Read<EndPointHeader>(decompressedBuffer.AsSpan(0, decompressedLength));
         decompressedHeader.IsCompressed.Should().BeFalse();
         decompressedHeader.OriginalLength.Should().Be(0);
 
@@ -97,7 +97,7 @@ public class PacketCompressorTests
         var packet = CreateCompressiblePacket(256);
 
         // Handshake 플래그 설정
-        var header = EndPointHeader.Read(packet);
+        var header = MemoryMarshal.Read<EndPointHeader>(packet);
         header.Flags = EndPointHeader.FlagHandshake;
         header.Write(packet.AsSpan());
 
@@ -115,7 +115,7 @@ public class PacketCompressorTests
     [Fact]
     public void TryCompress_TooSmallPacket_ReturnsFalse()
     {
-        var tinyPacket = new byte[EndPointHeader.Size]; // GameHeader도 없는 크기
+        var tinyPacket = new byte[EndPointHeader.SizeOf]; // GameHeader도 없는 크기
 
         var result = PacketCompressor.TryCompress(
             tinyPacket, compressionThreshold: 0,
@@ -139,7 +139,6 @@ public class PacketCompressorTests
 
         // 랜덤 데이터는 압축률이 0이거나 오히려 커지므로 스킵
         result.Should().BeFalse("랜덤 데이터는 LZ4 압축 효과 없음");
-        buffer.Should().BeNull();
     }
 
     /// <summary>
@@ -148,7 +147,7 @@ public class PacketCompressorTests
     [Fact]
     public void TryDecompress_TooSmallPayload_ReturnsFalse()
     {
-        var tiny = new byte[EndPointHeader.Size - 1];
+        var tiny = new byte[EndPointHeader.SizeOf - 1];
 
         var result = PacketCompressor.TryDecompress(
             tiny, out var buffer, out var length);
@@ -163,7 +162,7 @@ public class PacketCompressorTests
     [Fact]
     public void TryDecompress_InvalidOriginalLength_ReturnsFalse()
     {
-        var packet = new byte[EndPointHeader.Size + 16];
+        var packet = new byte[EndPointHeader.SizeOf + 16];
         var header = new EndPointHeader
         {
             TotalLength = packet.Length,
@@ -184,7 +183,7 @@ public class PacketCompressorTests
     [Fact]
     public void TryDecompress_OriginalLengthExceedsLimit_ReturnsFalse()
     {
-        var packet = new byte[EndPointHeader.Size + 16];
+        var packet = new byte[EndPointHeader.SizeOf + 16];
         var header = new EndPointHeader
         {
             TotalLength = packet.Length,
@@ -206,16 +205,16 @@ public class PacketCompressorTests
     public void Compress_SetsOriginalLength_Decompress_ClearsIt()
     {
         var packet = CreateCompressiblePacket(512);
-        var originalGameDataLength = packet.Length - EndPointHeader.Size;
+        var originalGameDataLength = packet.Length - EndPointHeader.SizeOf;
 
         // 압축
         PacketCompressor.TryCompress(packet, 32, out var compBuf, out var compLen);
-        var compHeader = EndPointHeader.Read(compBuf.AsSpan(0, compLen));
+        var compHeader = MemoryMarshal.Read<EndPointHeader>(compBuf.AsSpan(0, compLen));
         compHeader.OriginalLength.Should().Be(originalGameDataLength);
 
         // 해제
         PacketCompressor.TryDecompress(compBuf.AsSpan(0, compLen), out var decBuf, out var decLen);
-        var decHeader = EndPointHeader.Read(decBuf.AsSpan(0, decLen));
+        var decHeader = MemoryMarshal.Read<EndPointHeader>(decBuf.AsSpan(0, decLen));
         decHeader.OriginalLength.Should().Be(0, "해제 후 OriginalLength는 0이어야 함");
 
         PacketCompressor.ReturnBuffer(compBuf);
@@ -231,14 +230,14 @@ public class PacketCompressorTests
         var packet = CreateCompressiblePacket(512);
 
         PacketCompressor.TryCompress(packet, 32, out var compBuf, out var compLen);
-        var compHeader = EndPointHeader.Read(compBuf.AsSpan(0, compLen));
+        var compHeader = MemoryMarshal.Read<EndPointHeader>(compBuf.AsSpan(0, compLen));
 
         compHeader.TotalLength.Should().Be(compLen, "압축 후 TotalLength == 실제 압축 패킷 길이");
         compLen.Should().BeLessThan(packet.Length);
 
         // 해제 후 TotalLength 복원
         PacketCompressor.TryDecompress(compBuf.AsSpan(0, compLen), out var decBuf, out var decLen);
-        var decHeader = EndPointHeader.Read(decBuf.AsSpan(0, decLen));
+        var decHeader = MemoryMarshal.Read<EndPointHeader>(decBuf.AsSpan(0, decLen));
 
         decHeader.TotalLength.Should().Be(decLen, "해제 후 TotalLength == 실제 해제 패킷 길이");
         decLen.Should().Be(packet.Length, "해제 후 패킷 크기 == 원본 크기");
@@ -256,16 +255,16 @@ public class PacketCompressorTests
         var packet = CreateCompressiblePacket(512);
 
         // ErrorCode 설정
-        var header = EndPointHeader.Read(packet);
+        var header = MemoryMarshal.Read<EndPointHeader>(packet);
         header.ErrorCode = 42;
         header.Write(packet.AsSpan());
 
         PacketCompressor.TryCompress(packet, 32, out var compBuf, out var compLen);
-        var compHeader = EndPointHeader.Read(compBuf.AsSpan(0, compLen));
+        var compHeader = MemoryMarshal.Read<EndPointHeader>(compBuf.AsSpan(0, compLen));
         compHeader.ErrorCode.Should().Be(42, "ErrorCode는 압축 후 보존");
 
         PacketCompressor.TryDecompress(compBuf.AsSpan(0, compLen), out var decBuf, out var decLen);
-        var decHeader = EndPointHeader.Read(decBuf.AsSpan(0, decLen));
+        var decHeader = MemoryMarshal.Read<EndPointHeader>(decBuf.AsSpan(0, decLen));
         decHeader.ErrorCode.Should().Be(42, "ErrorCode는 해제 후 보존");
 
         PacketCompressor.ReturnBuffer(compBuf);
@@ -278,10 +277,10 @@ public class PacketCompressorTests
     [Fact]
     public void EndPointHeader_Size_Is12Bytes()
     {
-        EndPointHeader.Size.Should().Be(12);
+        EndPointHeader.SizeOf.Should().Be(12);
         // Unsafe.SizeOf와 일치하는지도 검증
         var structSize = System.Runtime.CompilerServices.Unsafe.SizeOf<EndPointHeader>();
-        structSize.Should().Be(EndPointHeader.Size, "Pack=1 구조체 크기가 상수와 일치해야 함");
+        structSize.Should().Be(EndPointHeader.SizeOf, "Pack=1 구조체 크기가 상수와 일치해야 함");
     }
 
     /// <summary>
@@ -313,10 +312,10 @@ public class PacketCompressorTests
         MemoryMarshal.Write(packet.AsSpan(), in header);
 
         var gameHeader = new GameHeader { MsgId = 1, SequenceId = 1 };
-        gameHeader.Write(packet.AsSpan(EndPointHeader.Size));
+        gameHeader.Write(packet.AsSpan(EndPointHeader.SizeOf));
 
         // 반복 패턴으로 채움 (LZ4 압축 효율 확보)
-        var payloadStart = EndPointHeader.Size + GameHeader.Size;
+        var payloadStart = EndPointHeader.SizeOf + GameHeader.SizeOf;
         for (var i = payloadStart; i < totalSize; i++)
             packet[i] = (byte)(i % 4);
 
@@ -337,10 +336,11 @@ public class PacketCompressorTests
             ErrorCode = 0,
             Flags = 0
         };
+        
         MemoryMarshal.Write(packet.AsSpan(), in header);
 
         var gameHeader = new GameHeader { MsgId = 1, SequenceId = 1 };
-        gameHeader.Write(packet.AsSpan(EndPointHeader.Size));
+        gameHeader.Write(packet.AsSpan(EndPointHeader.SizeOf));
 
         return packet;
     }

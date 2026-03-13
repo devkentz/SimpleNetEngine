@@ -95,6 +95,16 @@ public interface ISessionActor : IDisposable
     void ClearDisconnected();
 
     /// <summary>
+    /// 클라이언트 SequenceId 검증 및 갱신 (Replay Attack 방어)
+    /// </summary>
+    bool ValidateAndUpdateSequenceId(ushort clientSeqId);
+
+    /// <summary>
+    /// 마지막으로 수신한 클라이언트 SequenceId (로깅용)
+    /// </summary>
+    ushort LastClientSequenceId { get; }
+
+    /// <summary>
     /// Actor mailbox에 비동기 콜백을 push하고 완료를 대기.
     /// 외부 스레드에서 Actor 상태에 thread-safe하게 접근할 때 사용.
     /// Scoped DI 컨테이너가 생성되어 콜백에 전달됨.

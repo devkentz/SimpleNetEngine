@@ -61,7 +61,7 @@ namespace SimpleNetEngine.Client.Network
                 if (0 >= totalSize || PacketDefine.MaxPacketSize <= totalSize)
                     throw new InvalidDataException($"Invalid Packet Length : {totalSize}");
 
-                var endPointHeader = MemoryMarshal.Read<EndPointHeader>(buffer.GetReadSpan(EndPointHeader.Size));
+                var endPointHeader = MemoryMarshal.Read<EndPointHeader>(buffer.GetReadSpan(EndPointHeader.SizeOf));
 
                 // Step 1: 암호화된 패킷 복호화
                 if (endPointHeader.IsEncrypted)
@@ -78,7 +78,7 @@ namespace SimpleNetEngine.Client.Network
                         // 복호화된 패킷에서 헤더 재읽기 (ArrayPool 버퍼는 요청보다 클 수 있으므로 TotalLength로 슬라이스)
                         var decHeader = MemoryMarshal.Read<EndPointHeader>(decryptedPacket);
                         var decSpan = decryptedPacket.AsSpan(0, decHeader.TotalLength);
-                        var innerData = decSpan[EndPointHeader.Size..];
+                        var innerData = decSpan[EndPointHeader.SizeOf..];
 
                         ParseInnerPacket(packets, decHeader, innerData);
                     }
@@ -90,10 +90,10 @@ namespace SimpleNetEngine.Client.Network
                     continue;
                 }
 
-                buffer.ReadAdvance(EndPointHeader.Size);
+                buffer.ReadAdvance(EndPointHeader.SizeOf);
 
                 // Step 2: 압축 또는 평문 패킷 처리
-                var remainingData = totalSize - EndPointHeader.Size;
+                var remainingData = totalSize - EndPointHeader.SizeOf;
                 ParseFromBuffer(packets, buffer, endPointHeader, remainingData, totalSize);
             }
 
@@ -143,8 +143,8 @@ namespace SimpleNetEngine.Client.Network
             if (parser == null)
                 throw new InvalidDataException($"Unknown packet ID: {gameHeader.MsgId}");
 
-            var payloadSize = data.Length - GameHeader.Size;
-            var message = parser.ParseFrom(data.Slice(GameHeader.Size, payloadSize));
+            var payloadSize = data.Length - GameHeader.SizeOf;
+            var message = parser.ParseFrom(data.Slice(GameHeader.SizeOf, payloadSize));
             packets.Add(new NetworkPacket(endPointHeader, gameHeader, message));
         }
 
@@ -178,8 +178,8 @@ namespace SimpleNetEngine.Client.Network
             }
             else
             {
-                var gameHeader = MemoryMarshal.Read<GameHeader>(buffer.GetReadSpan(GameHeader.Size));
-                buffer.ReadAdvance(GameHeader.Size);
+                var gameHeader = MemoryMarshal.Read<GameHeader>(buffer.GetReadSpan(GameHeader.SizeOf));
+                buffer.ReadAdvance(GameHeader.SizeOf);
 
                 if (endPointHeader.ErrorCode != 0)
                 {
@@ -191,7 +191,7 @@ namespace SimpleNetEngine.Client.Network
                 if (parser == null)
                     throw new InvalidDataException($"Unknown packet ID: {gameHeader.MsgId}");
 
-                var payloadSize = totalSize - EndPointHeader.Size - GameHeader.Size;
+                var payloadSize = totalSize - EndPointHeader.SizeOf - GameHeader.SizeOf;
                 var message = parser.ParseFrom(buffer.GetReadSpan(payloadSize));
                 buffer.ReadAdvance(payloadSize);
 
@@ -204,18 +204,18 @@ namespace SimpleNetEngine.Client.Network
 
         private byte[]? DecryptPacket(ReadOnlySpan<byte> encryptedPacket, EndPointHeader endPointHeader)
         {
-            if (_decryptAesGcm == null || encryptedPacket.Length < EndPointHeader.Size + TagSize)
+            if (_decryptAesGcm == null || encryptedPacket.Length < EndPointHeader.SizeOf + TagSize)
                 return null;
 
-            var tag = encryptedPacket.Slice(EndPointHeader.Size, TagSize);
-            var ciphertext = encryptedPacket[(EndPointHeader.Size + TagSize)..];
+            var tag = encryptedPacket.Slice(EndPointHeader.SizeOf, TagSize);
+            var ciphertext = encryptedPacket[(EndPointHeader.SizeOf + TagSize)..];
 
             Span<byte> nonce = stackalloc byte[NonceSize];
             var cnt = Interlocked.Increment(ref _decryptCounter);
             BinaryPrimitives.WriteUInt64LittleEndian(nonce, cnt);
             nonce[8] = DirectionS2C;
 
-            var outSize = EndPointHeader.Size + ciphertext.Length;
+            var outSize = EndPointHeader.SizeOf + ciphertext.Length;
             var decryptedBuffer = ArrayPool<byte>.Shared.Rent(outSize);
             var outSpan = decryptedBuffer.AsSpan();
 
@@ -229,11 +229,11 @@ namespace SimpleNetEngine.Client.Network
             };
             newHeader.Write(outSpan);
 
-            var plaintextSpan = outSpan.Slice(EndPointHeader.Size, ciphertext.Length);
+            var plaintextSpan = outSpan.Slice(EndPointHeader.SizeOf, ciphertext.Length);
 
             try
             {
-                _decryptAesGcm.Decrypt(nonce, ciphertext, tag, plaintextSpan, encryptedPacket[..EndPointHeader.Size]);
+                _decryptAesGcm.Decrypt(nonce, ciphertext, tag, plaintextSpan, encryptedPacket[..EndPointHeader.SizeOf]);
                 return decryptedBuffer;
             }
             catch (AuthenticationTagMismatchException)

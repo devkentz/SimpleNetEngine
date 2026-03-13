@@ -9,7 +9,7 @@ namespace SimpleNetEngine.Game.Middleware;
 /// (gatewayNodeId, sessionId, response, requestId) => void
 /// GameSessionChannelListener.SendResponse가 Msg에 직접 직렬화
 /// </summary>
-public delegate void SendResponseDelegate(long gatewayNodeId, long sessionId, Response response, ushort requestId);
+public delegate void SendResponseDelegate(long gatewayNodeId, long sessionId, Response response, ushort requestId, ushort sequenceId);
 
 /// <summary>
 /// 패킷 처리 Middleware 인터페이스

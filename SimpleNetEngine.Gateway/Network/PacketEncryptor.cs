@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using SimpleNetEngine.Protocol.Packets;
 
@@ -43,16 +44,14 @@ public static class PacketEncryptor
         encryptedBuffer = null;
         encryptedLength = 0;
 
-        if (payload.Length < EndPointHeader.Size)
+        if (!NetHeaderHelper.TryRead<EndPointHeader>(payload, out var endPointHeader))
             return false;
-
-        var endPointHeader = EndPointHeader.Read(payload);
 
         // Handshake 패킷은 암호화하지 않음
         if (endPointHeader.IsHandshake)
             return false;
 
-        var plaintext = payload[EndPointHeader.Size..];
+        var plaintext = NetHeaderHelper.GetPayload<EndPointHeader>(payload);
 
         // Nonce 생성: [Counter(8B)][Direction(1B)][Padding(3B)]
         Span<byte> nonce = stackalloc byte[NonceSize];
@@ -62,7 +61,7 @@ public static class PacketEncryptor
         // nonce[9..11] = 0 (stackalloc zero-initialized)
 
         // 출력 버퍼: [EndPointHeader][Tag(16B)][Ciphertext]
-        var totalSize = EndPointHeader.Size + TagSize + plaintext.Length;
+        var totalSize = EndPointHeader.SizeOf + TagSize + plaintext.Length;
         encryptedBuffer = ArrayPool<byte>.Shared.Rent(totalSize);
         encryptedLength = totalSize;
 
@@ -78,11 +77,11 @@ public static class PacketEncryptor
         };
         newHeader.Write(outSpan);
 
-        var tagSpan = outSpan.Slice(EndPointHeader.Size, TagSize);
-        var ciphertextSpan = outSpan.Slice(EndPointHeader.Size + TagSize, plaintext.Length);
+        var tagSpan = outSpan.Slice(EndPointHeader.SizeOf, TagSize);
+        var ciphertextSpan = outSpan.Slice(EndPointHeader.SizeOf + TagSize, plaintext.Length);
 
         // AES-256-GCM 암호화 (EndPointHeader는 AAD로 사용하여 무결성 보호)
-        aesGcm.Encrypt(nonce, plaintext, ciphertextSpan, tagSpan, outSpan[..EndPointHeader.Size]);
+        aesGcm.Encrypt(nonce, plaintext, ciphertextSpan, tagSpan, outSpan[..EndPointHeader.SizeOf]);
 
         return true;
     }
@@ -108,13 +107,14 @@ public static class PacketEncryptor
         decryptedBuffer = null;
         decryptedLength = 0;
 
-        if (payload.Length < EndPointHeader.Size + TagSize)
+        if (!NetHeaderHelper.TryRead<EndPointHeader>(payload, out var endPointHeader))
             return false;
 
-        var endPointHeader = EndPointHeader.Read(payload);
+        if (payload.Length < EndPointHeader.SizeOf + TagSize)
+            return false;
 
-        var tag = payload.Slice(EndPointHeader.Size, TagSize);
-        var ciphertext = payload[(EndPointHeader.Size + TagSize)..];
+        var tag = payload.Slice(EndPointHeader.SizeOf, TagSize);
+        var ciphertext = payload[(EndPointHeader.SizeOf + TagSize)..];
 
         // Nonce 생성
         Span<byte> nonce = stackalloc byte[NonceSize];
@@ -123,7 +123,7 @@ public static class PacketEncryptor
         nonce[8] = direction;
 
         // 출력 버퍼: [EndPointHeader][Plaintext]
-        var totalSize = EndPointHeader.Size + ciphertext.Length;
+        var totalSize = EndPointHeader.SizeOf + ciphertext.Length;
         decryptedBuffer = ArrayPool<byte>.Shared.Rent(totalSize);
         decryptedLength = totalSize;
 
@@ -139,13 +139,13 @@ public static class PacketEncryptor
         };
         newHeader.Write(outSpan);
 
-        var plaintextSpan = outSpan.Slice(EndPointHeader.Size, ciphertext.Length);
+        var plaintextSpan = outSpan.Slice(EndPointHeader.SizeOf, ciphertext.Length);
 
         try
         {
             // AES-256-GCM 복호화 (EndPointHeader를 AAD로 검증)
             // AAD는 원본 EndPointHeader (암호화 시점의 헤더)
-            aesGcm.Decrypt(nonce, ciphertext, tag, plaintextSpan, payload[..EndPointHeader.Size]);
+            aesGcm.Decrypt(nonce, ciphertext, tag, plaintextSpan, payload[..EndPointHeader.SizeOf]);
             return true;
         }
         catch (AuthenticationTagMismatchException)

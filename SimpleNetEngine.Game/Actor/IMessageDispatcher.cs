@@ -90,10 +90,10 @@ public class MessageDispatcher : IMessageDispatcher
     /// </summary>
     private static int? ExtractOpcode(ReadOnlyMemory<byte> payload)
     {
-        if (payload.Length < EndPointHeader.Size + sizeof(int))
+        if (payload.Length < EndPointHeader.SizeOf + sizeof(int))
             return null;
 
-        return BinaryPrimitives.ReadInt32LittleEndian(payload.Span[EndPointHeader.Size..]);
+        return BinaryPrimitives.ReadInt32LittleEndian(payload.Span[EndPointHeader.SizeOf..]);
     }
 }
 

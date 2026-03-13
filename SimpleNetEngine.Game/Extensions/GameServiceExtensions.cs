@@ -101,9 +101,10 @@ public static class GameServiceExtensions
         services.AddSingleton<ActorDisconnectHandler>();
 
         // Middleware Pipeline (AOP) - Actor 내부에서 실행됨
-        // 실행 순서: Exception → Logging → Performance
+        // 실행 순서: Exception → SequenceId → Logging → Performance
         services.AddSingleton<MiddlewarePipelineFactory>();
         services.AddUserMiddleware<ExceptionHandlingMiddleware>(ServiceLifetime.Singleton);
+        services.AddUserMiddleware<SequenceIdMiddleware>(ServiceLifetime.Singleton);
         services.AddUserMiddleware<LoggingMiddleware>(ServiceLifetime.Singleton);
         services.AddUserMiddleware<PerformanceMiddleware>(ServiceLifetime.Singleton);
 

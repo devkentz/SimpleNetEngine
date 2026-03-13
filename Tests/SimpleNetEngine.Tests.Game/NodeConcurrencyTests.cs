@@ -135,7 +135,7 @@ public class NodeConcurrencyTests
     {
         var header = new NodeHeader { MsgId = msgId, ActorId = actorId };
         var msg = new Msg();
-        msg.InitPool(NodeHeader.Size);
+        msg.InitPool(NodeHeader.SizeOf);
         MemoryMarshal.Write(msg.Slice(), in header);
         return NodePacket.Create(ref msg);
     }

@@ -4,6 +4,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -95,7 +96,16 @@ namespace SimpleNetEngine.Client
 
         private readonly TcpClientImplement _tcpClientImplement;
         private bool _disposed  = false;
-        private ushort _msgSeq = 0;
+        private ushort _msgSeq;
+
+        /// <summary>
+        /// 다음 SequenceId 발급 (단조 증가, 0 건너뛰기)
+        /// </summary>
+        private ushort NextMsgSeq()
+        {
+            _msgSeq = _msgSeq == ushort.MaxValue ? (ushort)1 : (ushort)(_msgSeq + 1);
+            return _msgSeq;
+        }
 
         // --- Idle Ping (Heartbeat) ---
         private long _lastSentTicks;
@@ -265,7 +275,7 @@ namespace SimpleNetEngine.Client
 
             try
             {
-                InternalSend(new EndPointHeader(), new GameHeader { MsgId = msgId, SequenceId = 0, RequestId = 0 }, packet, options);
+                InternalSend(new EndPointHeader(), new GameHeader { MsgId = msgId, SequenceId = NextMsgSeq(), RequestId = 0 }, packet, options);
             }
             catch (Exception ex)
             {
@@ -305,7 +315,7 @@ namespace SimpleNetEngine.Client
             try
             {
                 return (TResponse) await _rpcManager.SendRequestAsync(
-                    requestId => InternalSend(new EndPointHeader(), new GameHeader { MsgId = msgId, SequenceId = _msgSeq, RequestId = requestId }, request, options),
+                    requestId => InternalSend(new EndPointHeader(), new GameHeader { MsgId = msgId, SequenceId = NextMsgSeq(), RequestId = requestId }, request, options),
                     cancellationToken
                 );
             }
@@ -384,7 +394,7 @@ namespace SimpleNetEngine.Client
             Volatile.Write(ref _lastSentTicks, Stopwatch.GetTimestamp());
 
             var payloadSize = message.CalculateSize();
-            var totalSize = EndPointHeader.Size + GameHeader.Size + payloadSize;
+            var totalSize = EndPointHeader.SizeOf + GameHeader.SizeOf + payloadSize;
             endPointHeader.TotalLength = totalSize;
 
             var buffer = ArrayPool<byte>.Shared.Rent(totalSize);
@@ -395,10 +405,10 @@ namespace SimpleNetEngine.Client
                 int pos = 0;
 
                 System.Runtime.InteropServices.MemoryMarshal.Write(span.Slice(pos), in endPointHeader);
-                pos += EndPointHeader.Size;
+                pos += EndPointHeader.SizeOf;
 
                 System.Runtime.InteropServices.MemoryMarshal.Write(span.Slice(pos), in gameHeader);
-                pos += GameHeader.Size;
+                pos += GameHeader.SizeOf;
 
                 message.WriteTo(span.Slice(pos, payloadSize));
 
@@ -436,21 +446,21 @@ namespace SimpleNetEngine.Client
             encryptedBuffer = null;
             encryptedLength = 0;
 
-            if (plainPacket.Length < EndPointHeader.Size || _encryptAesGcm == null)
+            if (plainPacket.Length < EndPointHeader.SizeOf || _encryptAesGcm == null)
                 return false;
 
-            var header = EndPointHeader.Read(plainPacket);
+            var header = MemoryMarshal.Read<EndPointHeader>(plainPacket);
             if (header.IsHandshake)
                 return false;
 
-            var plaintext = plainPacket[EndPointHeader.Size..];
+            var plaintext = plainPacket[EndPointHeader.SizeOf..];
 
             Span<byte> nonce = stackalloc byte[EncNonceSize];
             var cnt = Interlocked.Increment(ref _encryptCounter);
             BinaryPrimitives.WriteUInt64LittleEndian(nonce, cnt);
             nonce[8] = DirectionC2S;
 
-            var outSize = EndPointHeader.Size + EncTagSize + plaintext.Length;
+            var outSize = EndPointHeader.SizeOf + EncTagSize + plaintext.Length;
             encryptedBuffer = ArrayPool<byte>.Shared.Rent(outSize);
             encryptedLength = outSize;
 
@@ -465,10 +475,10 @@ namespace SimpleNetEngine.Client
             };
             newHeader.Write(outSpan);
 
-            var tagSpan = outSpan.Slice(EndPointHeader.Size, EncTagSize);
-            var ciphertextSpan = outSpan.Slice(EndPointHeader.Size + EncTagSize, plaintext.Length);
+            var tagSpan = outSpan.Slice(EndPointHeader.SizeOf, EncTagSize);
+            var ciphertextSpan = outSpan.Slice(EndPointHeader.SizeOf + EncTagSize, plaintext.Length);
 
-            _encryptAesGcm.Encrypt(nonce, plaintext, ciphertextSpan, tagSpan, outSpan[..EndPointHeader.Size]);
+            _encryptAesGcm.Encrypt(nonce, plaintext, ciphertextSpan, tagSpan, outSpan[..EndPointHeader.SizeOf]);
             return true;
         }
 
@@ -557,8 +567,6 @@ namespace SimpleNetEngine.Client
                         continue;
                     }
                     
-                    _msgSeq = packet.GameHeader.SequenceId;
-
                     // 메시지 큐 크기 제한 (DoS 방어)
                     if (_recvList.Count >= _config.MaxQueueSize)
                     {
@@ -574,6 +582,10 @@ namespace SimpleNetEngine.Client
                     // 메시지 인터셉터 확인 (handshake 중 서버 푸시 메시지 수신용)
                     if (_messageInterceptors.TryRemove(packet.GameHeader.MsgId, out var tcs))
                     {
+                        // 첫 서버 패킷(ReadyToHandshakeNtf)에서 SequenceId 초기값 동기화
+                        if (_msgSeq == 0 && packet.GameHeader.SequenceId != 0)
+                            _msgSeq = packet.GameHeader.SequenceId;
+
                         tcs.TrySetResult(packet.Message);
                         continue;
                     }

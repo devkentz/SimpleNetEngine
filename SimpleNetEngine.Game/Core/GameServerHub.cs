@@ -40,7 +40,8 @@ public class GameServerHub(
             context.SendResponse?.Invoke(
                 context.GatewayNodeId, context.SessionId,
                 Response.Error((short)ErrorCode.GameSessionExpired),
-                context.RequestId);
+                context.RequestId,
+                0);
             context.Dispose();
             return;
         }

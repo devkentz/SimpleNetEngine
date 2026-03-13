@@ -366,6 +366,17 @@ internal class MockActor : ISessionActor
 
     public void ClearDisconnected() { DisconnectedTicks = 0; }
 
+    private ushort _lastClientSequenceId;
+    public ushort LastClientSequenceId => _lastClientSequenceId;
+
+    public bool ValidateAndUpdateSequenceId(ushort clientSeqId)
+    {
+        if (clientSeqId <= _lastClientSequenceId && _lastClientSequenceId != 0)
+            return false;
+        _lastClientSequenceId = clientSeqId;
+        return true;
+    }
+
     public Task ExecuteAsync(Func<IServiceProvider, Task> action) => Task.CompletedTask;
 
     public virtual void Dispose()

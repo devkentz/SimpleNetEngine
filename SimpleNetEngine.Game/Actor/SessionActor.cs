@@ -29,6 +29,8 @@ public class SessionActor : ISessionActor
     private readonly ILogger _logger;
     private readonly QueuedResponseWriter<IActorMessage> _mailbox;
     private long _sequenceId;
+    private ushort _lastClientSequenceId;
+    private bool _seqInitialized;
     private long _lastActivityTicks;
     private long _disconnectedTicks;
     private Guid _reconnectKey;
@@ -39,6 +41,7 @@ public class SessionActor : ISessionActor
     public ActorState Status { get; set; }
     public Dictionary<string, object> State { get; } = [];
     public long SequenceId => _sequenceId;
+    public ushort LastClientSequenceId => _lastClientSequenceId;
     public long LastActivityTicks => Volatile.Read(ref _lastActivityTicks);
     public long DisconnectedTicks => Volatile.Read(ref _disconnectedTicks);
     public Guid ReconnectKey => _reconnectKey;
@@ -61,7 +64,7 @@ public class SessionActor : ISessionActor
         _pipeline = pipeline;
         _logger = logger;
 
-        _sequenceId = 0;
+        _sequenceId = Random.Shared.Next(1, ushort.MaxValue + 1);
         _lastActivityTicks = Stopwatch.GetTimestamp();
         _reconnectKey = Guid.NewGuid();
 
@@ -78,10 +81,14 @@ public class SessionActor : ISessionActor
 
     /// <summary>
     /// 재접속 시 라우팅 정보 갱신
+    /// 클라이언트가 새 인스턴스로 재접속하면 Handshake에서 새 SequenceId를 받으므로
+    /// 서버도 검증 기준을 리셋하여 첫 패킷에서 다시 기준값을 설정
     /// </summary>
     public void UpdateRouting(long gatewayNodeId)
     {
         GatewayNodeId = gatewayNodeId;
+        _seqInitialized = false;
+        _lastClientSequenceId = 0;
 
         _logger.LogDebug(
             "Actor routing updated: ActorId={ActorId}, Gateway={GatewayNodeId}",
@@ -89,11 +96,42 @@ public class SessionActor : ISessionActor
     }
 
     /// <summary>
-    /// 다음 시퀀스 번호 발급 (원자적 증가)
+    /// 다음 시퀀스 번호 발급 (원자적 증가, ushort 범위, 0 건너뛰기)
     /// </summary>
     public long NextSequenceId()
     {
-        return Interlocked.Increment(ref _sequenceId);
+        var next = Interlocked.Increment(ref _sequenceId);
+        // ushort 범위 유지, 0 건너뛰기
+        if ((ushort)next == 0)
+            next = Interlocked.Increment(ref _sequenceId);
+        return (ushort)next;
+    }
+
+    /// <summary>
+    /// 클라이언트 SequenceId 검증 및 갱신 (Replay Attack 방어)
+    /// Actor mailbox 내에서 순차 실행되므로 동시성 안전
+    /// </summary>
+    public bool ValidateAndUpdateSequenceId(ushort clientSeqId)
+    {
+        if (clientSeqId == 0)
+            return false;
+
+        if (!_seqInitialized)
+        {
+            _lastClientSequenceId = clientSeqId;
+            _seqInitialized = true;
+            return true;
+        }
+
+        // 양의 반원 방식 wraparound 검증
+        int diff = (ushort)(clientSeqId - _lastClientSequenceId);
+        if (diff > 0 && diff < 32768)
+        {
+            _lastClientSequenceId = clientSeqId;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -177,6 +215,9 @@ public class SessionActor : ISessionActor
                 ? pam.Context
                 : throw new InvalidOperationException($"Unexpected message type: {message.GetType().Name}");
 
+            // Actor 참조를 미들웨어에 전달 (SequenceId 검증 등)
+            context.Items["Actor"] = this;
+
             // OpenTelemetry: MsgId 기반 메시지별 처리 시간 측정
             // ParentActivityContext로 Gateway → GameServer.Process → Actor.Process 트레이스 체인 유지
             var msgId = ExtractMsgId(message.Payload);
@@ -207,7 +248,8 @@ public class SessionActor : ISessionActor
                         context.GatewayNodeId,
                         context.SessionId,
                         response,
-                        context.RequestId);
+                        context.RequestId,
+                        (ushort)NextSequenceId());
                 }
             }
 
@@ -233,10 +275,10 @@ public class SessionActor : ISessionActor
     /// </summary>
     private static int ExtractMsgId(ReadOnlyMemory<byte> payload)
     {
-        if (payload.Length < EndPointHeader.Size + sizeof(int))
+        if (payload.Length < EndPointHeader.SizeOf + sizeof(int))
             return -1;
 
-        return BinaryPrimitives.ReadInt32LittleEndian(payload.Span[EndPointHeader.Size..]);
+        return BinaryPrimitives.ReadInt32LittleEndian(payload.Span[EndPointHeader.SizeOf..]);
     }
 
     public void Dispose()

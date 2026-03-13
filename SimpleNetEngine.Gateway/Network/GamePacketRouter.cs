@@ -188,14 +188,13 @@ public class GamePacketRouter : IDisposable
             e.Socket.Receive(ref payloadMsg);
 
             var payloadSpan = payloadMsg.Slice();
-            if (payloadSpan.Length < GSCHeader.Size)
+            if (!NetHeaderHelper.TryRead<GSCHeader>(payloadSpan, out var header))
             {
                 _logger.LogWarning("Invalid GameSessionChannel packet (payload too small)");
                 return;
             }
 
-            var header = MemoryMarshal.Read<GSCHeader>(payloadSpan);
-            var data = payloadSpan.Slice(GSCHeader.Size);
+            var data = NetHeaderHelper.GetPayload<GSCHeader>(payloadSpan);
 
             switch (header.Type)
             {
@@ -238,9 +237,9 @@ public class GamePacketRouter : IDisposable
         try
         {
             // Step 1: 선택적 압축 (FlagCompressed 힌트)
-            if (_options.EnableCompression && currentPayload.Length >= EndPointHeader.Size)
+            if (_options.EnableCompression && NetHeaderHelper.HasHeader<EndPointHeader>(currentPayload))
             {
-                var epHeader = EndPointHeader.Read(currentPayload);
+                ref readonly var epHeader = ref NetHeaderHelper.Peek<EndPointHeader>(currentPayload);
                 if (epHeader.IsCompressed)
                 {
                     if (PacketCompressor.TryCompress(currentPayload, _options.CompressionThreshold,
@@ -257,9 +256,9 @@ public class GamePacketRouter : IDisposable
             }
 
             // Step 2: 선택적 암호화 (FlagEncrypted 힌트 또는 세션 암호화 활성)
-            if (currentPayload.Length >= EndPointHeader.Size)
+            if (NetHeaderHelper.HasHeader<EndPointHeader>(currentPayload))
             {
-                var epHeader = EndPointHeader.Read(currentPayload);
+                ref readonly var epHeader = ref NetHeaderHelper.Peek<EndPointHeader>(currentPayload);
                 if (epHeader.IsEncrypted && session.IsEncryptionActive)
                 {
                     session.SendEncrypted(currentPayload);
@@ -301,7 +300,7 @@ public class GamePacketRouter : IDisposable
 
         // NetMQ 풀에서 Unmanaged 메모리 블록 할당 (GC 0)
         var msg = new Msg();
-        msg.InitPool(GSCHeader.Size + userPacket.Length);
+        msg.InitPool(GSCHeader.SizeOf + userPacket.Length);
 
         try
         {
@@ -320,7 +319,7 @@ public class GamePacketRouter : IDisposable
 
             // Mesh Header 직렬화 및 클라이언트 데이터 복사를 동기적으로 수행 (버퍼 재사용 문제 회피)
             MemoryMarshal.Write(span, in header);
-            userPacket.CopyTo(span.Slice(GSCHeader.Size));
+            userPacket.CopyTo(span.Slice(GSCHeader.SizeOf));
 
             // 워커 쓰레드(GatewaySession.OnReceived)에서는 큐에 삽입만 수행
             var envelope = new GSCMessageEnvelope(targetNodeId, ref msg);

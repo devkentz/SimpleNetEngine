@@ -57,7 +57,7 @@ public class GameServerHubTests : IDisposable
     /// </summary>
     private static byte[] CreatePayloadWithMsgId(int msgId, ushort requestId = 1)
     {
-        var payload = new byte[EndPointHeader.Size + GameHeader.Size];
+        var payload = new byte[EndPointHeader.SizeOf + GameHeader.SizeOf];
 
         var endPointHeader = new EndPointHeader { TotalLength = payload.Length };
         System.Runtime.InteropServices.MemoryMarshal.Write(payload.AsSpan(), in endPointHeader);
@@ -68,7 +68,7 @@ public class GameServerHubTests : IDisposable
             SequenceId = 0,
             RequestId = requestId
         };
-        gameHeader.Write(payload.AsSpan(EndPointHeader.Size));
+        gameHeader.Write(payload.AsSpan(EndPointHeader.SizeOf));
 
         return payload;
     }
@@ -84,7 +84,7 @@ public class GameServerHubTests : IDisposable
             SessionId = sessionId,
             RequestId = 1,
             Payload = payload,
-            SendResponse = (gwId, sessId, resp, reqId) =>
+            SendResponse = (gwId, sessId, resp, reqId, seqId) =>
             {
                 _sentResponses.Add((gwId, sessId, resp, reqId));
             }
