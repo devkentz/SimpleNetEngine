@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using SimpleNetEngine.Protocol.Packets;
@@ -25,8 +26,8 @@ public static class TelemetryHelper
         var activity = Activity.Current;
         if (activity == null) return;
 
-        header.TraceId = activity.TraceId.ToGuid();
-        header.SpanId = activity.SpanId.ToLong();
+        WriteTraceId(activity.TraceId, out header.TraceIdHigh, out header.TraceIdLow);
+        header.SpanId = SpanIdToLong(activity.SpanId);
     }
 
     /// <summary>
@@ -37,8 +38,8 @@ public static class TelemetryHelper
         var activity = Activity.Current;
         if (activity == null) return;
 
-        header.TraceId = activity.TraceId.ToGuid();
-        header.SpanId = activity.SpanId.ToLong();
+        WriteTraceId(activity.TraceId, out header.TraceIdHigh, out header.TraceIdLow);
+        header.SpanId = SpanIdToLong(activity.SpanId);
     }
 
     /// <summary>
@@ -46,12 +47,12 @@ public static class TelemetryHelper
     /// </summary>
     public static Activity? ExtractAndStartActivity(in GSCHeader header, string name, ActivityKind kind = ActivityKind.Internal)
     {
-        if (header.TraceId == Guid.Empty)
+        if (header.TraceIdHigh == 0 && header.TraceIdLow == 0)
             return Source.StartActivity(name, kind);
 
-        var traceId = ActivityTraceId.CreateFromBytes(header.TraceId.ToByteArray());
-        var spanId = ActivitySpanId.CreateFromBytes(BitConverter.GetBytes(header.SpanId));
-        
+        var traceId = ReadTraceId(header.TraceIdHigh, header.TraceIdLow);
+        var spanId = LongToSpanId(header.SpanId);
+
         var parentContext = new ActivityContext(traceId, spanId, ActivityTraceFlags.Recorded);
         return Source.StartActivity(name, kind, parentContext);
     }
@@ -61,29 +62,47 @@ public static class TelemetryHelper
     /// </summary>
     public static Activity? ExtractAndStartActivity(in NodeHeader header, string name, ActivityKind kind = ActivityKind.Internal)
     {
-        if (header.TraceId == Guid.Empty)
+        if (header.TraceIdHigh == 0 && header.TraceIdLow == 0)
             return Source.StartActivity(name, kind);
 
-        var traceId = ActivityTraceId.CreateFromBytes(header.TraceId.ToByteArray());
-        var spanId = ActivitySpanId.CreateFromBytes(BitConverter.GetBytes(header.SpanId));
-        
+        var traceId = ReadTraceId(header.TraceIdHigh, header.TraceIdLow);
+        var spanId = LongToSpanId(header.SpanId);
+
         var parentContext = new ActivityContext(traceId, spanId, ActivityTraceFlags.Recorded);
         return Source.StartActivity(name, kind, parentContext);
     }
 
-    // Guid <-> ActivityTraceId 변환 확장 메서드
-    private static Guid ToGuid(this ActivityTraceId traceId)
+    // ActivityTraceId → (high, low) 변환 (zero-alloc)
+    private static void WriteTraceId(ActivityTraceId traceId, out long high, out long low)
     {
-        byte[] bytes = new byte[16];
+        Span<byte> bytes = stackalloc byte[16];
         traceId.CopyTo(bytes);
-        return new Guid(bytes);
+        high = BinaryPrimitives.ReadInt64LittleEndian(bytes);
+        low = BinaryPrimitives.ReadInt64LittleEndian(bytes[8..]);
     }
 
-    // long <-> ActivitySpanId 변환 확장 메서드
-    private static long ToLong(this ActivitySpanId spanId)
+    // (high, low) → ActivityTraceId 변환 (zero-alloc)
+    private static ActivityTraceId ReadTraceId(long high, long low)
     {
-        byte[] bytes = new byte[8];
+        Span<byte> bytes = stackalloc byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes, high);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes[8..], low);
+        return ActivityTraceId.CreateFromBytes(bytes);
+    }
+
+    // ActivitySpanId → long 변환
+    private static long SpanIdToLong(ActivitySpanId spanId)
+    {
+        Span<byte> bytes = stackalloc byte[8];
         spanId.CopyTo(bytes);
-        return BitConverter.ToInt64(bytes);
+        return BinaryPrimitives.ReadInt64LittleEndian(bytes);
+    }
+
+    // long → ActivitySpanId 변환
+    private static ActivitySpanId LongToSpanId(long value)
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes, value);
+        return ActivitySpanId.CreateFromBytes(bytes);
     }
 }

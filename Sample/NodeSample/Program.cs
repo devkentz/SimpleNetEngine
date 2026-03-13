@@ -1,8 +1,6 @@
 using NodeSample.Generated;
 using SimpleNetEngine.Node.Extensions;
-using OpenTelemetry.Logs;
-using OpenTelemetry.Metrics;
-using OpenTelemetry.Trace;
+using SimpleNetEngine.Infrastructure.Telemetry;
 using Serilog;
 
 namespace NodeSample;
@@ -20,29 +18,12 @@ class Program
                 {
                     configuration.ReadFrom.Configuration(context.Configuration);
                 }, writeToProviders: true)
-                .ConfigureLogging((context, logging) =>
-                {
-                    logging.AddOpenTelemetry(options =>
-                    {
-                        options.IncludeFormattedMessage = true;
-                        options.IncludeScopes = true;
-                        options.AddOtlpExporter();
-                    });
-                })
                 .ConfigureServices((context, services) =>
                 {
                     var section = context.Configuration.GetSection("NodeSample");
 
-                    // OpenTelemetry
-                    services.AddOpenTelemetry()
-                        .WithTracing(tracing => tracing
-                            .AddSource("NetworkEngine.Merged")
-                            .AddAspNetCoreInstrumentation()
-                            .AddOtlpExporter())
-                        .WithMetrics(metrics => metrics
-                            .AddAspNetCoreInstrumentation()
-                            .AddRuntimeInstrumentation()
-                            .AddOtlpExporter());
+                    // OpenTelemetry (Tracing + Metrics + Logging)
+                    services.AddNetworkEngineTelemetry();
 
                     // Stateless Service 통합 등록 (빌더 패턴)
                     services.AddStatelessService(opt =>
