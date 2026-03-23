@@ -43,6 +43,19 @@ public static class TelemetryHelper
     }
 
     /// <summary>
+    /// GSCHeader에서 트레이스 컨텍스트만 추출 (Activity 생성 없음, Poller 쓰레드 최적화용)
+    /// </summary>
+    public static ActivityContext? ExtractTraceContext(in GSCHeader header)
+    {
+        if (header.TraceIdHigh == 0 && header.TraceIdLow == 0)
+            return null;
+
+        var traceId = ReadTraceId(header.TraceIdHigh, header.TraceIdLow);
+        var spanId = LongToSpanId(header.SpanId);
+        return new ActivityContext(traceId, spanId, ActivityTraceFlags.Recorded);
+    }
+
+    /// <summary>
     /// GSCHeader에서 트레이스 컨텍스트 추출 및 새 Activity 시작
     /// </summary>
     public static Activity? ExtractAndStartActivity(in GSCHeader header, string name, ActivityKind kind = ActivityKind.Internal)

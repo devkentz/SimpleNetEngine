@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using NetMQ;
+using SimpleNetEngine.Game.Actor;
 using SimpleNetEngine.Game.Core;
 
 namespace SimpleNetEngine.Game.Middleware;
@@ -114,9 +115,36 @@ public class PacketContext : IDisposable
 
     public ushort SequenceId { get; set; }
 
+    /// <summary>
+    /// 현재 요청을 처리 중인 Actor (SessionActor에서 설정)
+    /// SendNtf에서 SequenceId 자동 증가 및 라우팅 정보 참조에 사용
+    /// </summary>
+    public ISessionActor? Actor { get; set; }
+
     public ushort GetNextSequenceId()
     {
         return (ushort) (SequenceId + 1);
+    }
+
+    /// <summary>
+    /// Notification 전송 (Server → Client 단방향)
+    /// SequenceId를 Actor에서 자동 증가, RequestId=0으로 전송
+    /// </summary>
+    /// <param name="response">전송할 Notification 응답</param>
+    /// <exception cref="InvalidOperationException">Actor 또는 SendResponse가 설정되지 않은 경우</exception>
+    public void SendNtf(Response response)
+    {
+        if (Actor == null)
+            throw new InvalidOperationException("Actor is not set on PacketContext. SendNtf requires an active Actor.");
+        if (SendResponse == null)
+            throw new InvalidOperationException("SendResponse callback is not set on PacketContext.");
+
+        SendResponse(
+            GatewayNodeId,
+            SessionId,
+            response,
+            requestId: 0,
+            sequenceId: Actor.NextSequenceId());
     }
 
     public void Dispose()
@@ -124,4 +152,15 @@ public class PacketContext : IDisposable
         if (_payloadMsg.IsInitialised)
             _payloadMsg.Close();
     }
+}
+
+/// <summary>
+/// PacketContext Scoped DI Holder
+/// ASP.NET Core의 IHttpContextAccessor와 동일한 패턴:
+/// SessionActor.ProcessMessageAsync에서 Scope 생성 후 값을 설정하면,
+/// 동일 Scope 내 Controller에서 PacketContext를 직접 주입받을 수 있다.
+/// </summary>
+public class PacketContextHolder
+{
+    public PacketContext? Context { get; set; }
 }

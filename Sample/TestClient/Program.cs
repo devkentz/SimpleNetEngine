@@ -11,6 +11,17 @@ using StackExchange.Redis;
 
 namespace TestClient;
 
+class TestMessageHandler : MessageHandler
+{
+    public event Action<KickoutNtf>? OnKickoutReceived;
+
+    protected override void LoadHandlers()
+    {
+        base.LoadHandlers();
+        AddHandler<KickoutNtf>(KickoutNtf.MsgId, ntf => OnKickoutReceived?.Invoke(ntf));
+    }
+}
+
 class Program
 {
     private const string PubKeyFileName = "server_signing_key.pub.pem";
@@ -26,7 +37,7 @@ class Program
         Console.WriteLine("=== SimpleNetEngine Test Client ===");
         Console.WriteLine();
 
-        var redisConn = args.Length > 0 ? args[0] : "localhost:6379";
+        var redisConn = args.Length > 0 ? args[0] : "redis-dev.k8s.home:6379";
         var registryKey = args.Length > 1 ? args[1] : "";
         var pubKeyPath = args.Length > 2 ? args[2] : FindPublicKeyPath();
 
@@ -104,7 +115,7 @@ class Program
     {
         try
         {
-            await using var redis = await ConnectionMultiplexer.ConnectAsync(redisConnectionString);
+            using var redis = await ConnectionMultiplexer.ConnectAsync(redisConnectionString);
             var db = redis.GetDatabase();
 
             var entries = await db.HashGetAllAsync(registryKey);
@@ -167,28 +178,76 @@ class Program
     // ──────────────────────────────────────────────
     static async Task RunEchoScenario(string? pubKeyPath)
     {
-        Console.WriteLine("── Scenario: Echo ──");
+        Console.WriteLine("── Scenario: Echo (ESC to quit) ──");
 
         using var cts = new CancellationTokenSource();
-        using var client = CreateClient(pubKeyPath);
+        using var client = CreateClient(pubKeyPath, onKickout: ntf =>
+        {
+            Console.WriteLine($"[Echo] *** KICKED OUT: Reason={ntf.Reason} ***");
+        });
         _ = UpdateLoop(client, cts);
 
         try
         {
             await ConnectAndLogin(client, "user-echo", cts.Token);
 
-            Console.WriteLine("[Echo] Sending EchoReq...");
-            var echoRes = await client.RequestAsync<EchoReq, EchoRes>(
-                new EchoReq { Message = "Hello NetworkEngine!" },
-                SendOptions.Encrypted, cts.Token);
+            while (!cts.Token.IsCancellationRequested)
+            {
+                Console.Write("[Echo] Message (ESC to quit): ");
 
-            Console.WriteLine($"[Echo] Response: {echoRes.Message} (TS: {echoRes.Timestamp})");
+                // ESC 키 감지를 위해 키 단위로 읽기
+                var input = ReadLineOrEsc();
+                if (input == null)
+                {
+                    Console.WriteLine();
+                    break;
+                }
+
+                if (string.IsNullOrWhiteSpace(input))
+                    continue;
+
+                var echoRes = await client.RequestAsync<EchoReq, EchoRes>(
+                    new EchoReq { Message = input },
+                    SendOptions.Encrypted, cts.Token);
+
+                Console.WriteLine($"[Echo] Response: {echoRes.Message} (TS: {echoRes.Timestamp})");
+            }
 
             await SendLogout(client, cts.Token);
-            Console.WriteLine("[Echo] SUCCESS");
+            Console.WriteLine("[Echo] Done.");
         }
         catch (Exception ex) { PrintError(ex); }
         finally { await cts.CancelAsync(); }
+    }
+
+    /// <summary>
+    /// 한 줄 입력을 받되, ESC 키 입력 시 null 반환
+    /// </summary>
+    static string? ReadLineOrEsc()
+    {
+        var sb = new System.Text.StringBuilder();
+        while (true)
+        {
+            var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Escape)
+                return null;
+            if (key.Key == ConsoleKey.Enter)
+            {
+                Console.WriteLine();
+                return sb.ToString();
+            }
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (sb.Length > 0)
+                {
+                    sb.Length--;
+                    Console.Write("\b \b");
+                }
+                continue;
+            }
+            sb.Append(key.KeyChar);
+            Console.Write(key.KeyChar);
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -234,8 +293,13 @@ class Program
         using var cts1 = new CancellationTokenSource();
         using var cts2 = new CancellationTokenSource();
 
-        // Client 1: 먼저 로그인
-        using var client1 = CreateClient(pubKeyPath);
+        // Client 1: 먼저 로그인 (KickoutNtf 수신 핸들러 등록)
+        var kickoutReceived = new TaskCompletionSource<KickoutNtf>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client1 = CreateClient(pubKeyPath, onKickout: ntf =>
+        {
+            Console.WriteLine($"[DupLogin] Client1 received KickoutNtf: Reason={ntf.Reason}");
+            kickoutReceived.TrySetResult(ntf);
+        });
         _ = UpdateLoop(client1, cts1);
 
         var client1Disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -350,6 +414,7 @@ class Program
         _ = UpdateLoop(client1, cts);
 
         string? reconnectKey;
+        ushort savedClientSeqId = 0;
 
         try
         {
@@ -362,6 +427,10 @@ class Program
                 new EchoReq { Message = "before disconnect" },
                 SendOptions.Encrypted, cts.Token);
             Console.WriteLine($"[Reconnect] Echo OK: {echo1.Message}");
+
+            // SequenceId 저장 (재접속 시 연속성 유지)
+            savedClientSeqId = client1.CurrentSequenceId;
+            Console.WriteLine($"[Reconnect] Saving SequenceId: ClientSeqId={savedClientSeqId}");
 
             // 강제 disconnect (TCP 끊기)
             Console.WriteLine("[Reconnect] Disconnecting TCP...");
@@ -398,7 +467,8 @@ class Program
                 new ReconnectReq
                 {
                     ReconnectKey = reconnectKey!,
-                    LastSequenceId = 0
+                    LastServerSequenceId = 0,
+                    LastClientSequenceId = savedClientSeqId
                 },
                 SendOptions.Encrypted, cts2.Token);
 
@@ -410,13 +480,21 @@ class Program
                     new ReconnectReq
                     {
                         ReconnectKey = reconnectKey!,
-                        LastSequenceId = 0
+                        LastServerSequenceId = 0,
+                        LastClientSequenceId = savedClientSeqId
                     },
                     SendOptions.Encrypted, cts2.Token);
             }
 
             if (reconnRes.Success)
             {
+                // SequenceId 동기화: 서버가 확인한 다음 SequenceId로 복원
+                if (reconnRes.ClientNextSequenceId > 0)
+                {
+                    client2.SyncSequenceId((ushort)(reconnRes.ClientNextSequenceId - 1));
+                    Console.WriteLine($"[Reconnect] SequenceId synced: next={reconnRes.ClientNextSequenceId}, serverSeq={reconnRes.ServerSequenceId}");
+                }
+
                 Console.WriteLine($"[Reconnect] Reconnect OK: NewKey={reconnRes.NewReconnectKey}");
                 client2.ReconnectKey = reconnRes.NewReconnectKey;
 
@@ -428,6 +506,12 @@ class Program
 
                 await SendLogout(client2, cts2.Token);
                 Console.WriteLine("[Reconnect] SUCCESS");
+            }
+            else if (reconnRes.RequiresRelogin)
+            {
+                // 기존 GameServer 다운 → stale session 정리됨 → 재로그인
+                Console.WriteLine($"[Reconnect] Session expired ({reconnRes.ErrorMessage}). Falling back to re-login...");
+                await FallbackRelogin(client2, "user-reconnect", cts2.Token);
             }
             else
             {
@@ -452,6 +536,7 @@ class Program
         _ = UpdateLoop(client1, cts);
 
         string? reconnectKey;
+        ushort savedClientSeqId = 0;
 
         try
         {
@@ -464,6 +549,10 @@ class Program
                 new EchoReq { Message = "before disconnect" },
                 SendOptions.Encrypted, cts.Token);
             Console.WriteLine($"[DelayReconn] Echo OK: {echo1.Message}");
+
+            // SequenceId 저장
+            savedClientSeqId = client1.CurrentSequenceId;
+            Console.WriteLine($"[DelayReconn] Saving SequenceId: ClientSeqId={savedClientSeqId}");
 
             // 강제 disconnect (TCP 끊기)
             Console.WriteLine("[DelayReconn] Disconnecting TCP...");
@@ -510,7 +599,8 @@ class Program
                 new ReconnectReq
                 {
                     ReconnectKey = reconnectKey!,
-                    LastSequenceId = 0
+                    LastServerSequenceId = 0,
+                    LastClientSequenceId = savedClientSeqId
                 },
                 SendOptions.Encrypted, cts2.Token);
 
@@ -522,13 +612,21 @@ class Program
                     new ReconnectReq
                     {
                         ReconnectKey = reconnectKey!,
-                        LastSequenceId = 0
+                        LastServerSequenceId = 0,
+                        LastClientSequenceId = savedClientSeqId
                     },
                     SendOptions.Encrypted, cts2.Token);
             }
 
             if (reconnRes.Success)
             {
+                // SequenceId 동기화
+                if (reconnRes.ClientNextSequenceId > 0)
+                {
+                    client2.SyncSequenceId((ushort)(reconnRes.ClientNextSequenceId - 1));
+                    Console.WriteLine($"[DelayReconn] SequenceId synced: next={reconnRes.ClientNextSequenceId}, serverSeq={reconnRes.ServerSequenceId}");
+                }
+
                 Console.WriteLine($"[DelayReconn] Reconnect OK after 20s delay: NewKey={reconnRes.NewReconnectKey}");
                 client2.ReconnectKey = reconnRes.NewReconnectKey;
 
@@ -540,6 +638,11 @@ class Program
 
                 await SendLogout(client2, cts2.Token);
                 Console.WriteLine("[DelayReconn] SUCCESS — Grace Period 내 재연결 성공");
+            }
+            else if (reconnRes.RequiresRelogin)
+            {
+                Console.WriteLine($"[DelayReconn] Session expired ({reconnRes.ErrorMessage}). Falling back to re-login...");
+                await FallbackRelogin(client2, "user-delayed-reconnect", cts2.Token);
             }
             else
             {
@@ -555,6 +658,42 @@ class Program
     // Helpers
     // ──────────────────────────────────────────────
 
+    /// <summary>
+    /// Reconnect 실패 시 재로그인 fallback (RequiresRelogin)
+    /// 기존 TCP 연결 + Handshake 유지한 채 LoginGameReq 전송
+    /// </summary>
+    static async Task FallbackRelogin(NetClient client, string credential, CancellationToken ct)
+    {
+        try
+        {
+            var loginRes = await client.RequestAsync<LoginGameReq, LoginGameRes>(
+                new LoginGameReq { Credential = ByteString.CopyFrom(credential, Encoding.UTF8) },
+                SendOptions.Encrypted, ct);
+
+            if (loginRes.Success)
+            {
+                client.ReconnectKey = loginRes.ReconnectKey;
+                Console.WriteLine($"  Re-login OK: ReconnectKey={loginRes.ReconnectKey}");
+
+                var echo = await client.RequestAsync<EchoReq, EchoRes>(
+                    new EchoReq { Message = "after re-login" },
+                    SendOptions.Encrypted, ct);
+                Console.WriteLine($"  Echo after re-login: {echo.Message}");
+
+                await SendLogout(client, ct);
+                Console.WriteLine("  Re-login SUCCESS");
+            }
+            else
+            {
+                Console.WriteLine($"  Re-login FAILED: {loginRes.ErrorMessage}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  Re-login error: {ex.Message}");
+        }
+    }
+
     static async Task SendLogout(NetClient client, CancellationToken ct)
     {
         try
@@ -569,7 +708,7 @@ class Program
         }
     }
 
-    static NetClient CreateClient(string? pubKeyPath, TimeSpan? pingInterval = null)
+    static NetClient CreateClient(string? pubKeyPath, TimeSpan? pingInterval = null, Action<KickoutNtf>? onKickout = null)
     {
         var gw = NextGateway();
 
@@ -579,7 +718,9 @@ class Program
             builder.SetMinimumLevel(LogLevel.Information);
         });
         var logger = loggerFactory.CreateLogger<NetClient>();
-        var handler = new MessageHandler();
+        var handler = new TestMessageHandler();
+        if (onKickout != null)
+            handler.OnKickoutReceived += onKickout;
         handler.Initialize();
 
         var config = new NetClientConfig

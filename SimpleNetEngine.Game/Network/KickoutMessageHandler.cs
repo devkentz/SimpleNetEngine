@@ -53,7 +53,7 @@ public class KickoutMessageHandler : IDisposable
 
         try
         {
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Sending KickoutRequest to GameServer-{NodeId}: UserId={UserId}",
                 targetNodeId, userId);
 

@@ -1,0 +1,14 @@
+{
+  "profiles": {
+    "StressTest.Worker": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DFRAME_CONTROLLER_ADDRESS": "http://localhost:7313",
+        "REDIS_CONNECTION": "redis-dev.k8s.home:6379"
+      }
+    },
+    "Docker": {
+      "commandName": "Docker"
+    }
+  }
+}

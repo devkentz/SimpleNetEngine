@@ -2,6 +2,7 @@ using NodeSample.Generated;
 using SimpleNetEngine.Node.Extensions;
 using SimpleNetEngine.Infrastructure.Telemetry;
 using Serilog;
+using NodeSample.Middleware;
 
 namespace NodeSample;
 
@@ -14,6 +15,7 @@ class Program
         try
         {
             var host = Host.CreateDefaultBuilder(args)
+                .ConfigureLogging(logging => logging.ClearProviders())
                 .UseSerilog((context, configuration) =>
                 {
                     configuration.ReadFrom.Configuration(context.Configuration);
@@ -23,7 +25,7 @@ class Program
                     var section = context.Configuration.GetSection("NodeSample");
 
                     // OpenTelemetry (Tracing + Metrics + Logging)
-                    services.AddNetworkEngineTelemetry();
+                    services.AddNetworkEngineTelemetry(context.Configuration);
 
                     // Stateless Service 통합 등록 (빌더 패턴)
                     services.AddStatelessService(opt =>
@@ -33,12 +35,13 @@ class Program
                         opt.ServiceMeshPort = section.GetValue("ServiceMeshPort", 0);
                         opt.AllowDynamicPort = section.GetValue("AllowDynamicPort", true);
                         opt.RedisConnectionString =   context.Configuration.GetConnectionString("redis") ?? 
-                                                      section.GetValue("RedisConnectionString", "localhost:6379")!;
+                                                      section.GetValue("RedisConnectionString", "redis-dev.k8s.home:6379")!;
                     });
 
                     // Source Generator: 앱 레벨 NodeController 핸들러 registrar 자동 등록
                     services.AddGeneratedNodeControllers();
 
+                    services.AddNodeMiddleware<SampleNodeMiddleware>(ServiceLifetime.Scoped);
                     // Health Check
                     services.AddHealthChecks();
                 })

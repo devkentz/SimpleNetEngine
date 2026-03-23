@@ -1,0 +1,16 @@
+{
+  "profiles": {
+    "StressTest.Controller": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DFRAME_CONTROLLER_PORT": "7312",
+        "DFRAME_WORKER_PORT": "7313"
+      }
+    },
+    "Docker": {
+      "commandName": "Docker",
+      "launchBrowser": true,
+      "launchUrl": "http://localhost:7312"
+    }
+  }
+}

@@ -59,6 +59,8 @@ public static class PacketCompressor
             var encodedSize = LZ4Codec.Encode(gameData, compressedBuffer.AsSpan(EndPointHeader.SizeOf));
             if (encodedSize <= 0 || encodedSize >= gameData.Length)
             {
+                ReturnBuffer(compressedBuffer);
+                compressedBuffer = null;
                 return false;
             }
 
@@ -82,8 +84,12 @@ public static class PacketCompressor
         }
         catch
         {
-            ArrayPool<byte>.Shared.Return(compressedBuffer);
-            compressedBuffer = null;
+            if(compressedBuffer != null)
+            {
+                ReturnBuffer(compressedBuffer);
+                compressedBuffer = null;
+            }
+
             return false;
         }
     }
@@ -133,7 +139,7 @@ public static class PacketCompressor
         var decodedSize = LZ4Codec.Decode(compressedData, outSpan[EndPointHeader.SizeOf..]);
         if (decodedSize != endPointHeader.OriginalLength)
         {
-            ArrayPool<byte>.Shared.Return(decompressedBuffer);
+            ReturnBuffer(decompressedBuffer);
             decompressedBuffer = null;
             decompressedLength = 0;
             return false;

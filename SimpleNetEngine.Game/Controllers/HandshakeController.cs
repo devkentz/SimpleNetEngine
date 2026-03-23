@@ -2,9 +2,11 @@ using Game.Protocol;
 using Internal.Protocol;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using SimpleNetEngine.Game.Actor;
 using SimpleNetEngine.Game.Core;
 using SimpleNetEngine.Game.Extensions;
+using SimpleNetEngine.Game.Options;
 using SimpleNetEngine.Node.Network;
 using SimpleNetEngine.Protocol.Packets;
 using SimpleNetEngine.ProtoGenerator;
@@ -20,7 +22,8 @@ namespace SimpleNetEngine.Game.Controllers;
 /// </summary>
 public class HandshakeController(
     ILogger<HandshakeController> logger,
-    INodeSender nodeSender)
+    INodeSender nodeSender,
+    IOptions<GameOptions> gameOptions)
 {
     /// <summary>
     /// HandshakeReq 처리: ECDH 키 교환 + Actor 상태 전환 + HandshakeRes 응답
@@ -35,7 +38,7 @@ public class HandshakeController(
     /// </summary>
     public async Task<Response> HandleHandshake(ISessionActor actor, HandshakeReq req)
     {
-        logger.LogInformation("HandshakeReq received: ActorId={ActorId}, Status={Status}", actor.ActorId, actor.Status);
+        logger.LogDebug("HandshakeReq received: ActorId={ActorId}, Status={Status}", actor.ActorId, actor.Status);
 
         // Actor 상태를 Authenticating으로 전환 (핸드셰이크 완료 → 인증 대기)
         actor.Status = ActorState.Authenticating;
@@ -52,7 +55,7 @@ public class HandshakeController(
             var activateReq = new ServiceMeshActivateEncryptionReq
             {
                 SessionId = actor.ActorId,
-                ClientEphemeralPublicKey = Google.Protobuf.ByteString.CopyFrom(req.ClientEphemeralPublicKey.ToByteArray())
+                ClientEphemeralPublicKey = req.ClientEphemeralPublicKey
             };
 
             var activateRes = await nodeSender.RequestAsync<ServiceMeshActivateEncryptionReq, ServiceMeshActivateEncryptionRes>(
@@ -67,7 +70,7 @@ public class HandshakeController(
             }
             else
             {
-                logger.LogInformation("Encryption activated: ActorId={ActorId}, Gateway={GatewayNodeId}",
+                logger.LogDebug("Encryption activated: ActorId={ActorId}, Gateway={GatewayNodeId}",
                     actor.ActorId, actor.GatewayNodeId);
             }
 
@@ -85,6 +88,7 @@ public class HandshakeController(
 
         // ReconnectKey는 HandshakeRes에 포함하지 않음 (평문 노출 방지)
         // 인증 성공 후 LoginGameRes(암호화)로 전달
+        var options = gameOptions.Value;
         var response = new HandshakeRes
         {
             ServerEphemeralPublicKey = gatewayEphemeralPublicKey != null
@@ -92,10 +96,12 @@ public class HandshakeController(
                 : Google.Protobuf.ByteString.Empty,
             ServerEphemeralSignature = gatewaySignature != null
                 ? Google.Protobuf.ByteString.CopyFrom(gatewaySignature)
-                : Google.Protobuf.ByteString.Empty
+                : Google.Protobuf.ByteString.Empty,
+            EncryptionEnabled = options.EncryptionEnabled,
+            PingIntervalMs = (uint)options.ClientPingInterval.TotalMilliseconds
         };
 
-        logger.LogInformation("HandshakeRes sent: ActorId={ActorId}, HasEncryption={HasEncryption}",
+        logger.LogDebug("HandshakeRes sent: ActorId={ActorId}, HasEncryption={HasEncryption}",
             actor.ActorId, gatewayEphemeralPublicKey != null);
 
         // HandshakeRes는 암호화 전에 전송 (아직 클라이언트가 키를 모르므로 평문)

@@ -63,7 +63,7 @@ public class NodeService : IDisposable
         var newNode = new RemoteNode(packet.Info);
         if (_nodeManager.TryAdd(packet.Info.RemoteId, newNode))
         {
-            _logger.LogInformation("New node joined and added to manager. RemoteId: {RemoteId}, Address: {Address}",
+            _logger.LogDebug("New node joined and added to manager. RemoteId: {RemoteId}, Address: {Address}",
                 packet.Info.RemoteId, packet.Info.Address);
 
             _nodeEventHandler.OnJoinNode(newNode);
@@ -119,8 +119,8 @@ public class NodeService : IDisposable
 
             await JoinClusterAsync();
 
-            _ = HeartBeatLoopAsync(_cancellationTokenSource.Token);
-            _ = CheckClusterStateLoopAsync(_cancellationTokenSource.Token);
+            _ = Task.Factory.StartNew(() => HeartBeatLoopAsync(_cancellationTokenSource.Token), TaskCreationOptions.LongRunning).Unwrap();
+            _ = Task.Factory.StartNew(() => CheckClusterStateLoopAsync(_cancellationTokenSource.Token), TaskCreationOptions.LongRunning).Unwrap();
 
             _logger.LogInformation("NodeService started successfully on port {Port}", actualPort);
         }
@@ -208,7 +208,7 @@ public class NodeService : IDisposable
                 {
                     if (_nodeManager.TryRemove(deadId, out var deadNode))
                     {
-                        _logger.LogInformation("Node detected dead: {DeadNodeId}, removing from manager.", deadId);
+                        _logger.LogDebug("Node detected dead: {DeadNodeId}, removing from manager.", deadId);
                         deadNode.ConnectionClosed();
 
                         OnLeaveNode(deadNode);
@@ -223,12 +223,12 @@ public class NodeService : IDisposable
 
                     if (_nodeId > newId)
                     {
-                        _logger.LogInformation("New node detected {_nodeId} : {NewNodeId}. Initiating connection.", _nodeId, newId);
+                        _logger.LogDebug("New node detected {_nodeId} : {NewNodeId}. Initiating connection.", _nodeId, newId);
                         await ConnectToNodeAsync(newId);
                     }
                     else
                     {
-                        _logger.LogInformation("New node detected {_nodeId} : {NewNodeId}. Waiting for it to initiate connection.", _nodeId, newId);
+                        _logger.LogDebug("New node detected {_nodeId} : {NewNodeId}. Waiting for it to initiate connection.", _nodeId, newId);
                     }
                 }
 
@@ -268,11 +268,11 @@ public class NodeService : IDisposable
 
             if (!_nodeManager.TryAdd(newNodeId, remoteNode))
             {
-                _logger.LogInformation("New node {NodeId} was already present in NodeManager.", newNodeId);
+                _logger.LogDebug("New node {NodeId} was already present in NodeManager.", newNodeId);
             }
             else
             {
-                _logger.LogInformation("Successfully connected to new node {NodeId}.", newNodeId);
+                _logger.LogDebug("Successfully connected to new node {NodeId}.", newNodeId);
                 _nodeEventHandler.OnJoinNode(remoteNode);
             }
         }

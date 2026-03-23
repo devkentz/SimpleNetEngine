@@ -22,10 +22,22 @@ public enum ErrorCode : short
     // 10xxx: Gateway + Connection
     /// <summary>GameServer 종료로 인한 연결 해제</summary>
     GatewayGameServerShutdown = 10001,
+    /// <summary>GameServer 전송 실패 (RouterMandatory — identity 미도달)</summary>
+    GatewayGameServerUnreachable = 10002,
+    /// <summary>클라이언트 응답 전송 실패 (TCP 소켓 쓰기 불가)</summary>
+    GatewayClientSendFailed = 10003,
 
     // 11xxx: Gateway + Session
     /// <summary>Gateway 레벨 세션 만료</summary>
     GatewaySessionExpired = 11001,
+
+    // 14xxx: Gateway + Protocol
+    /// <summary>잘못된 패킷 크기/형식 (I/O 레벨 검증 실패)</summary>
+    GatewayInvalidPacket = 14001,
+    /// <summary>복호화 또는 암호화 처리 실패</summary>
+    GatewayEncryptionError = 14002,
+    /// <summary>Rate limit 초과</summary>
+    GatewayRateLimitExceeded = 14003,
 
     // 12xxx: Gateway + Actor
     /// <summary>RequireActorState 검사 실패 (Gateway 경유)</summary>

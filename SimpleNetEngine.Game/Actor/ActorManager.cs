@@ -159,8 +159,8 @@ public class SessionActorManager : ISessionActorManager
             _sessionIdByReconnectKey[actor.ReconnectKey] = actor.ActorId;
 
             _logger.LogDebug(
-                "Actor added: ActorId={ActorId}, UserId={UserId}, ReconnectKey={ReconnectKey}, Total={Count}",
-                actor.ActorId, actor.UserId, actor.ReconnectKey, _actorsBySessionId.Count);
+                "Actor added: ActorId={ActorId}, UserId={UserId}, ReconnectKey={ReconnectKey}",
+                actor.ActorId, actor.UserId, actor.ReconnectKey);
 
             return Result<ISessionActor>.Ok(actor);
         }
@@ -182,8 +182,8 @@ public class SessionActorManager : ISessionActorManager
             actor.Dispose();
 
             _logger.LogDebug(
-                "Actor removed: ActorId={ActorId}, UserId={UserId}, Remaining={Count}",
-                sessionId, actor.UserId, _actorsBySessionId.Count);
+                "Actor removed: ActorId={ActorId}, UserId={UserId}",
+                sessionId, actor.UserId);
 
             return Result.Ok();
         }
@@ -204,8 +204,8 @@ public class SessionActorManager : ISessionActorManager
             RemoveFromIndexes(actor, sessionId);
 
             _logger.LogDebug(
-                "Actor unregistered (no dispose): ActorId={ActorId}, UserId={UserId}, Remaining={Count}",
-                sessionId, actor.UserId, _actorsBySessionId.Count);
+                "Actor unregistered (no dispose): ActorId={ActorId}, UserId={UserId}",
+                sessionId, actor.UserId);
 
             return Result<ISessionActor>.Ok(actor);
         }
@@ -263,7 +263,7 @@ public class SessionActorManager : ISessionActorManager
             new KeyValuePair<Guid, long>(actor.ReconnectKey, oldSessionId));
         _sessionIdByReconnectKey[actor.ReconnectKey] = newSessionId;
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Actor rekeyed: OldSessionId={OldSessionId}, NewSessionId={NewSessionId}, UserId={UserId}",
             oldSessionId, newSessionId, actor.UserId);
 

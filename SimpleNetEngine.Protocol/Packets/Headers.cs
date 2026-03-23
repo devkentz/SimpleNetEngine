@@ -35,7 +35,7 @@ public struct EndPointHeader : INetHeader<EndPointHeader>
     public int TotalLength;      // 헤더 포함 패킷 전체 길이
     public short ErrorCode;      // 0 = 정상, non-zero = 에러 전용 응답 (Payload 없음)
     public byte Flags;           // 압축/암호화 플래그
-    public byte Reserved;        // 향후 확장용
+    public byte Reserved;        // 예약
     public int OriginalLength;   // 압축 전 원본 크기 (FlagCompressed일 때만 유효, 해제 시 버퍼 크기 결정용)
 
     public static int SizeOf => Unsafe.SizeOf<EndPointHeader>();

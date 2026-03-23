@@ -38,6 +38,7 @@ public class LoginController(
     INodeSender nodeSender,
     ILoginHandler loginHandler,
     IDatabase redis,
+    IClientSender clientSender,
     IOptions<GameOptions> options,
     TimeProvider timeProvider)
 {
@@ -66,7 +67,7 @@ public class LoginController(
 
         var userId = authResult.UserId;
 
-        logger.LogInformation(
+        logger.LogDebug(
             "LoginGameReq received: ActorId={ActorId}, UserId={UserId}",
             actor.ActorId, userId);
 
@@ -125,7 +126,7 @@ public class LoginController(
         var reconnectKey = actor.RegenerateReconnectKey();
         await sessionStore.SetReconnectKeyAsync(reconnectKey, userId);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "New login completed: UserId={UserId}, SessionId={SessionId}",
             userId, actor.ActorId);
 
@@ -142,7 +143,7 @@ public class LoginController(
             "Same-node duplicate login: UserId={UserId}, OldSessionId={OldSessionId}, NewSessionId={NewSessionId}",
             userId, existingSession.SessionId, actor.ActorId);
 
-        // 기존 Actor에 Kickout Hook 호출 + 제거
+        // 기존 Actor에 Kickout Hook 호출 + 알림 전송 + 제거
         if (existingSession.SessionId != actor.ActorId)
         {
             var oldActorResult = actorManager.GetActor(existingSession.SessionId);
@@ -150,8 +151,13 @@ public class LoginController(
             {
                 // 새 Actor의 mailbox 스레드에서 직접 호출하면 old Actor와 race condition 발생
                 // old Actor의 mailbox에 푸시하여 순차 실행 보장
+                // KickoutNtf도 mailbox 안에서 전송해야 SequenceId race condition 방지
                 var oldActor = oldActorResult.Value;
-                await oldActor.ExecuteAsync(sp => loginHandler.OnKickoutAsync(oldActor, KickoutReason.DuplicateLogin));
+                await oldActor.ExecuteAsync(async sp =>
+                {
+                    await loginHandler.OnKickoutAsync(oldActor, EKickoutReason.DuplicateLogin);
+                    SendKickoutNtf(oldActor, EKickoutReason.DuplicateLogin);
+                });
             }
 
             var removeResult = actorManager.RemoveActor(existingSession.SessionId);
@@ -187,7 +193,7 @@ public class LoginController(
         var reconnectKey = actor.RegenerateReconnectKey();
         await sessionStore.SetReconnectKeyAsync(reconnectKey, userId);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "Same-node duplicate login resolved: UserId={UserId}, NewSessionId={SessionId}",
             userId, actor.ActorId);
 
@@ -239,7 +245,7 @@ public class LoginController(
         var reconnectKey = actor.RegenerateReconnectKey();
         await sessionStore.SetReconnectKeyAsync(reconnectKey, userId);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "Cross-node duplicate login resolved: UserId={UserId}, NewSessionId={SessionId}, KickoutSuccess={KickoutSuccess}",
             userId, actor.ActorId, ack.Success);
 
@@ -251,7 +257,7 @@ public class LoginController(
     /// </summary>
     public async Task<Response> HandleLogout(ISessionActor actor, LogoutReq req)
     {
-        logger.LogInformation(
+        logger.LogDebug(
             "LogoutReq received: ActorId={ActorId}, UserId={UserId}",
             actor.ActorId, actor.UserId);
 
@@ -278,6 +284,14 @@ public class LoginController(
         disconnectQueue.Schedule(actor.ActorId, actor.GatewayNodeId);
 
         return Response.Ok(new LogoutRes { Success = true });
+    }
+
+    /// <summary>
+    /// 기존 클라이언트에 KickoutNtf 전송 (GSC 경유, Actor 제거 전)
+    /// </summary>
+    private void SendKickoutNtf(ISessionActor actor, EKickoutReason reason)
+    {
+        clientSender.SendNtf(actor, Response.Ntf(new KickoutNtf { Reason = reason }));
     }
 
     /// <summary>

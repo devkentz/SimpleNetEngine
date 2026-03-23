@@ -1,3 +1,4 @@
+using Game.Protocol;
 using Microsoft.Extensions.Logging;
 using SimpleNetEngine.Game.Actor;
 using SimpleNetEngine.Game.Session;
@@ -33,13 +34,27 @@ public class GameLoginHandler(ILogger<GameLoginHandler> logger) : ILoginHandler
         return Task.CompletedTask;
     }
 
-    public Task OnReconnectedAsync(ISessionActor actor)
+    public Task OnReconnectedAsync(ISessionActor actor, ReconnectGapInfo gapInfo)
     {
-        logger.LogInformation("Reconnected hook: UserId={UserId}", actor.UserId);
+        if (gapInfo.HasServerToClientGap || gapInfo.HasClientToServerGap)
+        {
+            logger.LogWarning(
+                "Reconnected with gap: UserId={UserId}, S2C=[client:{ClientLastServer}→server:{ServerCurrent}], C2S=[server:{ServerLastClient}→client:{ClientLastClient}]",
+                actor.UserId,
+                gapInfo.ClientReportedLastServerSeqId, gapInfo.ServerCurrentSeqId,
+                gapInfo.ServerLastValidatedClientSeqId, gapInfo.ClientReportedLastClientSeqId);
+
+            // TODO: 상태 스냅샷 재전송, 클라이언트 재전송 요청 등 앱 로직
+        }
+        else
+        {
+            logger.LogInformation("Reconnected (no gap): UserId={UserId}", actor.UserId);
+        }
+
         return Task.CompletedTask;
     }
 
-    public Task<DisconnectAction> OnKickoutAsync(ISessionActor actor, KickoutReason reason)
+    public Task<DisconnectAction> OnKickoutAsync(ISessionActor actor, EKickoutReason reason)
     {
         logger.LogWarning("Kickout hook: UserId={UserId}, Reason={Reason}", actor.UserId, reason);
         return Task.FromResult(DisconnectAction.TerminateSession);

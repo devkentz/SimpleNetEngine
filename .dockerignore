@@ -1,0 +1,13 @@
+.vs/
+.git/
+.github/
+.claude/
+**/bin/
+**/obj/
+**/node_modules/
+**/.DS_Store
+*.user
+*.suo
+codeql-db/
+docs/
+Tests/

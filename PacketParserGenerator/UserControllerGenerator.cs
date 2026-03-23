@@ -64,13 +64,21 @@ namespace PacketParserGenerator
                 {
                     var msgId = Convert.ToInt32(attr.ConstructorArguments[0].Value!);
 
-                    // Handler 시그니처: Task<Response> Method(ISessionActor actor, TMessage req)
-                    if (member.Parameters.Length != 2 ||
-                        member.Parameters[0].Type.Name != "ISessionActor" ||
-                        member.ReturnType.Name != "Task")
+                    // Handler 시그니처:
+                    // (1) Task<Response> Method(ISessionActor actor, TMessage req)
+                    // (2) Task<Response> Method(ISessionActor actor, TMessage req, PacketContext ctx)
+                    if (member.ReturnType.Name != "Task" ||
+                        member.Parameters.Length < 2 || member.Parameters.Length > 3 ||
+                        member.Parameters[0].Type.Name != "ISessionActor")
                     {
                         continue;
                     }
+
+                    var hasPacketContext = member.Parameters.Length == 3 &&
+                        member.Parameters[2].Type.Name == "PacketContext";
+
+                    if (member.Parameters.Length == 3 && !hasPacketContext)
+                        continue;
 
                     var requestType = member.Parameters[1].Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
@@ -102,7 +110,7 @@ namespace PacketParserGenerator
                         requestTypeSymbol.ContainingAssembly,
                         context.SemanticModel.Compilation.Assembly);
 
-                    methods.Add(new HandlerMethod(member.Name, msgId, requestType, allowedStates, isExternal));
+                    methods.Add(new HandlerMethod(member.Name, msgId, requestType, allowedStates, isExternal, hasPacketContext));
                 }
             }
 
@@ -195,7 +203,15 @@ namespace PacketParserGenerator
                     sb.AppendLine("                if (parser == null) return null;");
                     sb.AppendLine("                var (header, message) = global::SimpleNetEngine.Game.Extensions.PacketHelper.ParseClientPacket(payload.Span, parser);");
                     sb.AppendLine($"                var controller = sp.GetRequiredService<{controller.FullyQualifiedName}>();");
-                    sb.AppendLine($"                return await controller.{method.Name}(actor, ({method.RequestType})message);");
+                    if (method.HasPacketContext)
+                    {
+                        sb.AppendLine($"                var ctx = sp.GetRequiredService<global::SimpleNetEngine.Game.Middleware.PacketContext>();");
+                        sb.AppendLine($"                return await controller.{method.Name}(actor, ({method.RequestType})message, ctx);");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"                return await controller.{method.Name}(actor, ({method.RequestType})message);");
+                    }
                     sb.AppendLine($"            }}{statesParam});");
                 }
             }
@@ -286,14 +302,16 @@ namespace PacketParserGenerator
             public string RequestType { get; }
             public List<string> AllowedStates { get; }
             public bool IsExternalRequestType { get; }
+            public bool HasPacketContext { get; }
 
-            public HandlerMethod(string name, int msgId, string requestType, List<string> allowedStates, bool isExternalRequestType)
+            public HandlerMethod(string name, int msgId, string requestType, List<string> allowedStates, bool isExternalRequestType, bool hasPacketContext)
             {
                 Name = name;
                 MsgId = msgId;
                 RequestType = requestType;
                 AllowedStates = allowedStates;
                 IsExternalRequestType = isExternalRequestType;
+                HasPacketContext = hasPacketContext;
             }
         }
     }

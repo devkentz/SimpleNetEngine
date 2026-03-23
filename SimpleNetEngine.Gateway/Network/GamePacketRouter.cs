@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Text;
+using System.Threading.Channels;
 using SimpleNetEngine.Gateway.Options;
 using SimpleNetEngine.Gateway.Core;
 using Microsoft.Extensions.Logging;
@@ -17,9 +17,12 @@ using ErrorCode = SimpleNetEngine.Protocol.Packets.ErrorCode;
 namespace SimpleNetEngine.Gateway.Network;
 
 /// <summary>
-/// Gateway ↔ GameServer GameSessionChannel 버스
-/// RouterSocket으로 모든 GameServer와 양방향 통신 (Data Plane Only)
-/// 서버간 제어(Control) 패킷은 Node Service Mesh (Control Plane)에서 처리됨
+/// Gateway ↔ GameServer GameSessionChannel 버스 (Dual-Socket 패턴)
+///
+/// Send RouterSocket: Gateway → GameServer 수신 포트 (Port N) — identity 기반 특정 GameServer 라우팅
+/// Recv RouterSocket: GameServer 송신 포트 (Port N+1) → Gateway
+///
+/// 단일 IO 쓰레드에서 양쪽 소켓을 배치 처리 (소켓이 분리되어 경합 없음)
 /// Service Discovery를 통한 동적 연결 지원
 /// </summary>
 public class GamePacketRouter : IDisposable
@@ -29,19 +32,41 @@ public class GamePacketRouter : IDisposable
     private readonly SessionMapper _sessionMapper;
     private readonly GatewaySessionRegistry _sessionRegistry;
 
-    private RouterSocket? _router;
-    private NetMQPoller? _poller;
-    private NetMQQueue<GSCMessageEnvelope>? _sendQueue;
+    // Dual RouterSocket (identity 기반 라우팅 유지 — DealerSocket은 round-robin이라 특정 GameServer 지정 불가)
+    private RouterSocket? _sendRouter;   // Gateway → GameServer recv port (send only)
+    private RouterSocket? _recvRouter;   // GameServer send port → Gateway (recv only)
+
+    // Recv: NetMQPoller 이벤트 기반 (자체 쓰레드), Send: 전용 Thread
+    private NetMQPoller? _recvPoller;
+    private Thread? _sendThread;
     private readonly CancellationTokenSource _cts = new();
+
+    // Channel<T> 기반 송신 큐 (멀티스레드 안전, GatewaySession IOCP 쓰레드에서 write)
+    private readonly Channel<GSCMessageEnvelope> _sendChannel =
+        Channel.CreateUnbounded<GSCMessageEnvelope>(new UnboundedChannelOptions
+        {
+            SingleReader = true,              // Send IO 쓰레드만 읽기
+            SingleWriter = false,             // 여러 IOCP 쓰레드에서 쓰기
+            AllowSynchronousContinuations = false
+        });
 
     // 라운드 로빈 인덱스 (미고정 세션용)
     private int _roundRobinIndex;
-    private readonly ConcurrentDictionary<long, string> _connectedGameServers = new();
+    private readonly ConcurrentDictionary<long, GameServerConnection> _connectedGameServers = new();
     private readonly ConcurrentDictionary<long, byte[]> _gameServerIdentities = new();
 
     // 라운드로빈용 캐시 배열 (변경 시에만 재생성, 읽기 시 O(1))
     private volatile long[] _gameServerNodeIdCache = [];
     private readonly Lock _cacheLock = new();
+
+    /// <summary>
+    /// GameServer 연결 정보 (send/recv 엔드포인트)
+    /// </summary>
+    private class GameServerConnection
+    {
+        public required string SendEndpoint { get; init; }
+        public required string RecvEndpoint { get; init; }
+    }
 
     private class GSCMessageEnvelope : IDisposable
     {
@@ -76,33 +101,179 @@ public class GamePacketRouter : IDisposable
 
     public void StartAsync()
     {
-        _logger.LogInformation("Starting GameSessionChannel Router...");
+        _logger.LogInformation("Starting GameSessionChannel Router (dual-socket)...");
 
-        _router = new RouterSocket();
-        _router.Options.RouterMandatory = false; // 죽은 노드로 전송 시 무시
+        var identity = Encoding.UTF8.GetBytes($"Gateway-{_options.GatewayNodeId}");
 
-        // Identity 설정 (Gateway-{NodeId})
-        var identity = $"Gateway-{_options.GatewayNodeId}";
-        _router.Options.Identity = Encoding.UTF8.GetBytes(identity);
+        // --- Send RouterSocket (Gateway → GameServer recv port) ---
+        _sendRouter = new RouterSocket();
+        _sendRouter.Options.RouterMandatory = true;
+        _sendRouter.Options.Identity = identity;
+        _sendRouter.Options.SendHighWatermark = 50000;
 
-        _sendQueue = new NetMQQueue<GSCMessageEnvelope>();
-        _sendQueue.ReceiveReady += OnSendReady;
+        // --- Recv RouterSocket (GameServer send port → Gateway) ---
+        _recvRouter = new RouterSocket();
+        _recvRouter.Options.RouterMandatory = false;
+        _recvRouter.Options.Identity = identity;
+        _recvRouter.Options.ReceiveHighWatermark = 50000;
 
-        // 수신 처리
-        _router.ReceiveReady += OnReceiveReady;
+        // --- Recv: NetMQPoller (자체 쓰레드에서 이벤트 기반 수신) ---
+        _recvRouter.ReceiveReady += (_, _) =>
+        {
+            while (TryReceivePacket()) { }
+        };
+        _recvPoller = new NetMQPoller { _recvRouter };
+        _recvPoller.RunAsync();
 
-        _poller = new NetMQPoller {_router, _sendQueue};
-        _poller.RunAsync();
+        // --- Send Thread (전용 쓰레드에서 Channel 소비) ---
+        _sendThread = new Thread(SendLoop) { Name = "GSC-GW-Send", IsBackground = true };
+        _sendThread.Start();
 
-        _logger.LogInformation("GameSessionChannel Router started with identity: {Identity}. Waiting for discovery via Node Mesh Events.", identity);
+        _logger.LogInformation("GameSessionChannel Router started (dual-socket)");
     }
 
-    public void ConnectToGameServer(long nodeId, string gameServerEndpoint)
+    /// <summary>
+    /// Send Thread: 전용 쓰레드에서 Channel 데이터 즉시 전송
+    /// Channel SingleReader=true → 동시 접근 쓰레드 항상 1개
+    /// </summary>
+    private void SendLoop()
     {
-        if (_router == null)
+        _logger.LogDebug("Gateway Send thread started: {ThreadId}", Environment.CurrentManagedThreadId);
+
+        try
+        {
+            var reader = _sendChannel.Reader;
+            while (WaitToRead(reader))
+            {
+                while (reader.TryRead(out var envelope))
+                {
+                    using (envelope)
+                        SendEnvelopeToRouter(envelope);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (TerminatingException) { }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in Gateway Send thread");
+        }
+
+        _logger.LogDebug("Gateway Send thread stopped");
+
+        bool WaitToRead(ChannelReader<GSCMessageEnvelope> r)
+        {
+            var vt = r.WaitToReadAsync(_cts.Token);
+            return vt.IsCompletedSuccessfully ? vt.Result : vt.AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    /// <summary>
+    /// Non-blocking 패킷 수신 (RouterSocket — identity + payload 2-frame)
+    /// </summary>
+    private bool TryReceivePacket()
+    {
+        var identityMsg = new Msg();
+        var payloadMsg = new Msg();
+        identityMsg.InitEmpty();
+        payloadMsg.InitEmpty();
+
+        try
+        {
+            if (!_recvRouter!.TryReceive(ref identityMsg, TimeSpan.Zero))
+                return false;
+
+            if (!identityMsg.HasMore)
+                return true;
+
+            _recvRouter.TryReceive(ref payloadMsg, TimeSpan.Zero);
+            ProcessReceivedPacket(ref payloadMsg);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error receiving GameSessionChannel message");
+            return false;
+        }
+        finally
+        {
+            identityMsg.Close();
+            payloadMsg.Close();
+        }
+    }
+
+    /// <summary>
+    /// 수신된 패킷 처리
+    /// </summary>
+    private void ProcessReceivedPacket(ref Msg payloadMsg)
+    {
+        var payloadSpan = payloadMsg.Slice();
+        if (!NetHeaderHelper.TryRead<GSCHeader>(payloadSpan, out var header))
+        {
+            _logger.LogWarning("[Gateway] Invalid GSC packet (payload too small: {Size} bytes, need {Need}, hex={Hex})",
+                payloadSpan.Length, GSCHeader.SizeOf, Convert.ToHexString(payloadSpan[..Math.Min(payloadSpan.Length, 32)]));
+            return;
+        }
+
+        var data = NetHeaderHelper.GetPayload<GSCHeader>(payloadSpan);
+        HandleServerPacket(in header, data);
+    }
+
+    /// <summary>
+    /// 송신 envelope을 Send RouterSocket으로 전송 (IO 쓰레드에서만 호출)
+    /// Identity frame으로 특정 GameServer에 라우팅
+    /// </summary>
+    private void SendEnvelopeToRouter(GSCMessageEnvelope envelope)
+    {
+        if (!_gameServerIdentities.TryGetValue(envelope.TargetNodeId, out var identityBytes))
+        {
+            _logger.LogWarning("Identity not found for GameServer-{NodeId} on send", envelope.TargetNodeId);
+            NotifySessionError(envelope, ErrorCode.GatewayGameServerUnreachable);
+            return;
+        }
+
+        using var identityMsg = new MsgDisposable(identityBytes);
+
+        try
+        {
+            _sendRouter!.Send(ref identityMsg.GetRef(), true);
+            _sendRouter!.Send(ref envelope.Payload, false);
+        }
+        catch (HostUnreachableException)
+        {
+            _logger.LogWarning("GameServer-{NodeId} unreachable (RouterMandatory)", envelope.TargetNodeId);
+            NotifySessionError(envelope, ErrorCode.GatewayGameServerUnreachable);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send packet to GameServer-{NodeId}", envelope.TargetNodeId);
+        }
+    }
+
+    /// <summary>
+    /// GSCHeader에서 SessionId를 추출하여 클라이언트에 에러 패킷 전송
+    /// </summary>
+    private void NotifySessionError(GSCMessageEnvelope envelope, ErrorCode errorCode)
+    {
+        var payloadSpan = envelope.Payload.Slice();
+        if (NetHeaderHelper.TryRead<GSCHeader>(payloadSpan, out var header)
+            && _sessionRegistry.TryGetBySessionId(header.SessionId, out var session))
+        {
+            session.Kick(errorCode);
+        }
+    }
+
+    /// <summary>
+    /// GameServer에 dual-socket 연결
+    /// </summary>
+    /// <param name="nodeId">GameServer NodeId</param>
+    /// <param name="recvEndpoint">GameServer 수신 포트 (Port N) — Gateway가 send로 연결</param>
+    /// <param name="sendEndpoint">GameServer 송신 포트 (Port N+1) — Gateway가 recv로 연결</param>
+    public void ConnectToGameServer(long nodeId, string recvEndpoint, string sendEndpoint)
+    {
+        if (_sendRouter == null || _recvRouter == null)
             return;
 
-        // 이미 연결된 경우 스킵
         if (_connectedGameServers.ContainsKey(nodeId))
         {
             _logger.LogDebug("GameServer-{NodeId} already connected, skipping", nodeId);
@@ -113,55 +284,63 @@ public class GamePacketRouter : IDisposable
 
         try
         {
-            _router.Connect(gameServerEndpoint);
-            _connectedGameServers[nodeId] = identity;
+            // Send first (Gateway → GameServer recv port)
+            _sendRouter.Connect(recvEndpoint);
+            // Then recv (GameServer send port → Gateway)
+            _recvRouter.Connect(sendEndpoint);
+
+            _connectedGameServers[nodeId] = new GameServerConnection
+            {
+                SendEndpoint = recvEndpoint,
+                RecvEndpoint = sendEndpoint
+            };
             _gameServerIdentities[nodeId] = Encoding.UTF8.GetBytes(identity);
 
             UpdateNodeIdCache();
 
-            _logger.LogInformation("Connected to {Identity} DataPlane Mesh ({Endpoint})",
-                identity, gameServerEndpoint);
+            _logger.LogInformation(
+                "Connected to GameServer-{NodeId} DataPlane: send→{SendEp}, recv←{RecvEp}",
+                nodeId, recvEndpoint, sendEndpoint);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to connect to DataPlane Mesh {Identity} ({Endpoint})",
-                identity, gameServerEndpoint);
+            _logger.LogError(ex, "Failed to connect to GameServer-{NodeId} DataPlane", nodeId);
         }
     }
 
     public void DisconnectFromGameServer(long nodeId)
     {
-        if (_router == null)
+        if (_sendRouter == null || _recvRouter == null)
             return;
 
-        // 해당 GameServer에 pin된 모든 세션에 에러 알림
         foreach (var session in _sessionRegistry.GetAll())
         {
             if (session.PinnedGameServerNodeId == nodeId)
             {
-                session.SendError((short)ErrorCode.GatewayGameServerShutdown);
-                session.Unpin();
-
-                _logger.LogInformation(
-                    "GameServer-{NodeId} shutdown: notified SocketId={SocketId}",
-                    nodeId, session.SocketId);
+                session.Kick(ErrorCode.GatewayGameServerShutdown);
             }
         }
 
-        if (_connectedGameServers.TryRemove(nodeId, out _))
+        if (_connectedGameServers.TryRemove(nodeId, out var conn))
         {
             _gameServerIdentities.TryRemove(nodeId, out _);
-            UpdateNodeIdCache();
 
-            // NetMQ RouterSocket은 명시적 Disconnect 메서드가 없음
-            // 연결 목록에서만 제거 (RouterMandatory=false로 전송 실패 시 무시)
+            try
+            {
+                // Disconnect recv first, then send
+                _recvRouter.Disconnect(conn.RecvEndpoint);
+                _sendRouter.Disconnect(conn.SendEndpoint);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error disconnecting from GameServer-{NodeId}", nodeId);
+            }
+
+            UpdateNodeIdCache();
             _logger.LogInformation("Disconnected from GameServer-{NodeId}", nodeId);
         }
     }
 
-    /// <summary>
-    /// 라운드로빈 캐시 배열 갱신 (GameServer 연결/해제 시에만 호출)
-    /// </summary>
     private void UpdateNodeIdCache()
     {
         lock (_cacheLock)
@@ -170,73 +349,21 @@ public class GamePacketRouter : IDisposable
         }
     }
 
-    private void OnReceiveReady(object? sender, NetMQSocketEventArgs e)
+    private void HandleServerPacket(in GSCHeader header, ReadOnlySpan<byte> payload)
     {
-        // Router-to-Router: [SourceIdentity][Payload]
-        // Payload = [GSCHeader][EndPointHeader][responseData]
-        var identityMsg = new Msg();
-        var payloadMsg = new Msg();
+        Log.HandleServerPacket(_logger, header.SessionId, payload.Length);
 
-        identityMsg.InitEmpty();
-        payloadMsg.InitEmpty();
-
-        try
-        {
-            e.Socket.Receive(ref identityMsg);
-            if (!identityMsg.HasMore) return;
-
-            e.Socket.Receive(ref payloadMsg);
-
-            var payloadSpan = payloadMsg.Slice();
-            if (!NetHeaderHelper.TryRead<GSCHeader>(payloadSpan, out var header))
-            {
-                _logger.LogWarning("Invalid GameSessionChannel packet (payload too small)");
-                return;
-            }
-
-            var data = NetHeaderHelper.GetPayload<GSCHeader>(payloadSpan);
-
-            switch (header.Type)
-            {
-                case GscMessageType.ServerPacket:
-                    HandleServerPacket(header, data);
-                    break;
-
-                default:
-                    _logger.LogWarning("Unexpected message type from GameServer: {Type}", header.Type);
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error processing GameSessionChannel message");
-        }
-        finally
-        {
-            identityMsg.Close();
-            payloadMsg.Close();
-        }
-    }
-
-    private void HandleServerPacket(GSCHeader header, ReadOnlySpan<byte> payload)
-    {
-        _logger.LogDebug("HandleServerPacket: SessionId={SessionId}, PayloadSize={Size}",
-            header.SessionId, payload.Length);
-
-        // GameServer → Gateway: SessionId로 클라이언트 세션 조회
         if (!_sessionRegistry.TryGetBySessionId(header.SessionId, out var session))
         {
-            _logger.LogWarning("Client session not found: SessionId={SessionId}", header.SessionId);
+            Log.SessionNotFound(_logger, header.SessionId);
             return;
         }
 
-        // Outbound 파이프라인: 압축 → 암호화 (순서 중요: compress-then-encrypt)
         var currentPayload = payload;
         byte[]? compressedBuffer = null;
 
         try
         {
-            // Step 1: 선택적 압축 (FlagCompressed 힌트)
             if (_options.EnableCompression && NetHeaderHelper.HasHeader<EndPointHeader>(currentPayload))
             {
                 ref readonly var epHeader = ref NetHeaderHelper.Peek<EndPointHeader>(currentPayload);
@@ -249,13 +376,11 @@ public class GamePacketRouter : IDisposable
                     }
                     else
                     {
-                        // 압축 스킵 시 FlagCompressed 힌트 제거 (클라이언트가 압축 패킷으로 오인하지 않도록)
                         ClearCompressedFlag(currentPayload);
                     }
                 }
             }
 
-            // Step 2: 선택적 암호화 (FlagEncrypted 힌트 또는 세션 암호화 활성)
             if (NetHeaderHelper.HasHeader<EndPointHeader>(currentPayload))
             {
                 ref readonly var epHeader = ref NetHeaderHelper.Peek<EndPointHeader>(currentPayload);
@@ -274,14 +399,8 @@ public class GamePacketRouter : IDisposable
         }
     }
 
-    /// <summary>
-    /// EndPointHeader에서 FlagCompressed를 제거 (in-place)
-    /// 압축 힌트가 있었지만 실제 압축이 스킵된 경우 사용
-    /// 기반 버퍼(NetMQ Msg)가 mutable이므로 Unsafe.AsRef 사용 안전
-    /// </summary>
     private static void ClearCompressedFlag(ReadOnlySpan<byte> payload)
     {
-        // Flags 필드 오프셋: TotalLength(4) + ErrorCode(2) = 6
         const int flagsOffset = sizeof(int) + sizeof(short);
         ref byte flags = ref Unsafe.AsRef(in payload[flagsOffset]);
         flags = (byte)(flags & ~EndPointHeader.FlagCompressed);
@@ -289,16 +408,16 @@ public class GamePacketRouter : IDisposable
 
     /// <summary>
     /// 클라이언트 패킷을 GameServer로 포워딩 (Session-Based Routing)
+    /// GatewaySession의 IOCP 쓰레드에서 호출됨 — Channel.Writer.TryWrite는 thread-safe
     /// </summary>
     public void ForwardToGameServer(ReadOnlySpan<byte> userPacket, long targetNodeId, long sessionId)
     {
-        if (_router == null || _poller == null || _sendQueue == null)
+        if (_sendRouter == null)
         {
             _logger.LogWarning("P2P bus not started");
             return;
         }
 
-        // NetMQ 풀에서 Unmanaged 메모리 블록 할당 (GC 0)
         var msg = new Msg();
         msg.InitPool(GSCHeader.SizeOf + userPacket.Length);
 
@@ -314,20 +433,21 @@ public class GamePacketRouter : IDisposable
                 SessionId = sessionId
             };
 
-            // OpenTelemetry 컨텍스트 주입 (TraceId 전파)
             TelemetryHelper.InjectContext(ref header);
 
-            // Mesh Header 직렬화 및 클라이언트 데이터 복사를 동기적으로 수행 (버퍼 재사용 문제 회피)
             MemoryMarshal.Write(span, in header);
             userPacket.CopyTo(span.Slice(GSCHeader.SizeOf));
 
-            // 워커 쓰레드(GatewaySession.OnReceived)에서는 큐에 삽입만 수행
             var envelope = new GSCMessageEnvelope(targetNodeId, ref msg);
-            _sendQueue.Enqueue(envelope);
+            if (!_sendChannel.Writer.TryWrite(envelope))
+            {
+                envelope.Dispose();
+                _logger.LogError("Failed to enqueue packet to GameServer-{NodeId}", targetNodeId);
+            }
         }
-        catch (TerminatingException ex)
+        catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to enqueue packet to GameServer-{NodeId}", targetNodeId);
+            _logger.LogError(ex, "Failed to forward packet to GameServer-{NodeId}", targetNodeId);
             if (msg.IsInitialised)
                 msg.Close();
         }
@@ -343,39 +463,6 @@ public class GamePacketRouter : IDisposable
         return cache[index];
     }
 
-    private void OnSendReady(object? sender, NetMQQueueEventArgs<GSCMessageEnvelope> e)
-    {
-        Debug.Assert(_router != null);
-
-        // Poller 쓰레드 루프 안에서 비동기로 실행됨
-        while (e.Queue.TryDequeue(out var envelope, TimeSpan.Zero))
-        {
-            if (envelope == null) continue;
-
-            using (envelope)
-            {
-                if (!_gameServerIdentities.TryGetValue(envelope.TargetNodeId, out var identityBytes))
-                {
-                    _logger.LogWarning("Identity not found for GameServer-{NodeId} on send", envelope.TargetNodeId);
-                    continue;
-                }
-
-                // MsgDisposable로 자동 리소스 관리
-                using var identityMsg = new MsgDisposable(identityBytes);
-
-                try
-                {
-                    _router.Send(ref identityMsg.GetRef(), true);
-                    _router.Send(ref envelope.Payload, false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to route packet to GameServer-{NodeId}", envelope.TargetNodeId);
-                }
-            }
-        }
-    }
-
     public void RegisterClientSession(Guid socketId, GatewaySession session)
     {
         _sessionRegistry.Register(socketId, session);
@@ -389,18 +476,23 @@ public class GamePacketRouter : IDisposable
     public void OnClientDisconnected(Guid socketId, long sessionId)
     {
         _sessionRegistry.TryRemove(socketId);
+
         if (sessionId != 0)
             _sessionRegistry.RemoveSessionId(sessionId);
+
         _sessionMapper.RemoveSocket(socketId);
     }
 
     public void Dispose()
     {
         _cts.Cancel();
-
-        _poller?.Dispose();
-        _sendQueue?.Dispose();
-        _router?.Dispose();
-        _logger.LogInformation("GameSessionChannel Router stopped");
+        _recvPoller?.Stop();
+        _sendChannel.Writer.Complete();
+        _sendThread?.Join(TimeSpan.FromSeconds(3));
+        _recvPoller?.Dispose();
+        _recvRouter?.Dispose();
+        _sendRouter?.Dispose();
+        _logger.LogInformation("GameSessionChannel Router stopped (dual-socket)");
     }
+
 }

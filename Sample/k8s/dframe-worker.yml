@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dframe-worker-config
+  namespace: dev
+data:
+  appsettings.json: |
+    {
+      "DFrame": {
+        "ControllerAddress": "http://dframe-controller.dev.svc.cluster.local:7313"
+      },
+      "Redis": {
+        "Connection": "redis-dev.default.svc.cluster.local:6379,abortConnect=false"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dframe-worker
+  namespace: dev
+  labels:
+    app: dframe-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: dframe-worker
+  template:
+    metadata:
+      labels:
+        app: dframe-worker
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: worker
+          image: harbor.k8s.home/stresstest/worker:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /app/appsettings.json
+              subPath: appsettings.json
+      volumes:
+        - name: config
+          configMap:
+            name: dframe-worker-config

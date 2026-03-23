@@ -1,5 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
-using System.Runtime.CompilerServices;
 using Google.Protobuf;
 
 namespace SimpleNetEngine.ProtoGenerator

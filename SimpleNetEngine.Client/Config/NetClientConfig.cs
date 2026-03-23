@@ -40,6 +40,13 @@ public class NetClientConfig
     public TimeSpan PingInterval { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// 서버 시간 동기화 요청 주기 (기본: 10초).
+    /// 트래픽 유무와 관계없이 이 간격으로 TimeSyncReq를 강제 전송하여 RTT 및 서버 시간 오프셋을 측정.
+    /// TimeSpan.Zero이면 시간 동기화 비활성화.
+    /// </summary>
+    public TimeSpan TimeSyncInterval { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// 서버 ECDSA 서명 검증용 공개키 PEM 파일 경로.
     /// null이면 서명 검증 없이 동작 (개발 모드, MITM 취약).
     /// 파일이 존재하지 않으면 경고 로그 후 서명 검증 없이 동작.

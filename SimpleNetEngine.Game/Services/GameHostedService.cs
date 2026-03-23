@@ -46,10 +46,12 @@ public class GameHostedService : IHostedService
 
         // 1. GameSessionChannel Listener 먼저 시작 (동적 포트 할당 시 실제 포트를 알아야 하므로)
         await _gscListener.StartAsync();
-        _logger.LogInformation("GameSessionChannel RouterSocket bound on port {Port}", _gscListener.BoundPort);
+        _logger.LogInformation("GameSessionChannel bound: recv={RecvPort}, send={SendPort}",
+            _gscListener.BoundRecvPort, _gscListener.BoundSendPort);
 
         // 2. 실제 바인딩된 포트로 NodeConfig 메타데이터 업데이트 (Gateway가 이 포트로 Connect)
-        _nodeConfig.Value.Metadata[NodeMetadataKeys.GameSessionChannelPort] = _gscListener.BoundPort.ToString();
+        _nodeConfig.Value.Metadata[NodeMetadataKeys.GameSessionChannelPort] = _gscListener.BoundRecvPort.ToString();
+        _nodeConfig.Value.Metadata[NodeMetadataKeys.GameSessionChannelSendPort] = _gscListener.BoundSendPort.ToString();
 
         // 3. Service Mesh 시작 (클러스터 등록 및 Heartbeat - 올바른 포트 메타데이터 포함)
         await _nodeService.StartAsync();

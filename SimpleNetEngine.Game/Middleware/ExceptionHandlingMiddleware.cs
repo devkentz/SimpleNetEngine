@@ -37,8 +37,8 @@ public class ExceptionHandlingMiddleware(ILogger<ExceptionHandlingMiddleware> lo
             {
                 // Actor가 있으면 NextSequenceId 발급, 없으면 0
                 ushort seqId = 0;
-                if (context.Items.TryGetValue("Actor", out var actorObj) && actorObj is Actor.SessionActor actor)
-                    seqId = (ushort)actor.NextSequenceId();
+                if (context.Actor != null)
+                    seqId = context.Actor.NextSequenceId();
 
                 context.SendResponse(
                     context.GatewayNodeId,

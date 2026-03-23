@@ -1,9 +1,6 @@
 namespace SimpleNetEngine.Game.Actor;
 
 /// <summary>
-/// 게임 세션 Actor 인터페이스 (클라이언트 유저와 1:1 대응)
-/// TcpServer의 IActor 패턴을 GameServer P2P 환경에 맞게 확장
-///
 /// TcpServer IActor: ActorId + Push
 /// GameServer ISessionActor: + UserId, GatewayNodeId, UpdateRouting, State
 /// </summary>
@@ -33,7 +30,7 @@ public interface ISessionActor : IDisposable
     /// <summary>
     /// 패킷 순서 보장을 위한 시퀀스 번호 (원자적 증가)
     /// </summary>
-    long SequenceId { get; }
+    int SequenceId { get; }
 
     /// <summary>
     /// 마지막 클라이언트 패킷 수신 시각 (Stopwatch.GetTimestamp)
@@ -63,14 +60,20 @@ public interface ISessionActor : IDisposable
     void Push(IActorMessage message);
 
     /// <summary>
-    /// 재접속 시 라우팅 정보 갱신
+    /// 재접속 시 라우팅 정보 갱신 (SequenceId 리셋)
     /// </summary>
     void UpdateRouting(long gatewayNodeId);
 
     /// <summary>
+    /// 재접속 시 라우팅 정보 갱신 + 클라이언트 SequenceId 연속성 유지
+    /// ReconnectReq에서 전달받은 lastClientSequenceId를 기준으로 검증 상태를 복원
+    /// </summary>
+    void UpdateRouting(long gatewayNodeId, ushort lastClientSequenceId);
+
+    /// <summary>
     /// 다음 시퀀스 번호 발급 (원자적 증가)
     /// </summary>
-    long NextSequenceId();
+    ushort NextSequenceId();
 
     /// <summary>
     /// 새로운 Reconnect Key 발급 (로그인 완료 시 호출)

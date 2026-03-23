@@ -35,9 +35,18 @@ public class Response(IMessage? message)
     }
 
     /// <summary>
-    /// 성공 응답 생성
+    /// 성공 응답 생성 (Req → Res 패턴)
     /// </summary>
     public static Response Ok(IMessage message)
+    {
+        return new Response(message);
+    }
+
+    /// <summary>
+    /// Notification 생성 (Server → Client 단방향 푸시)
+    /// 내부 구조는 Ok()와 동일하나, 의미론적으로 Ntf임을 명시
+    /// </summary>
+    public static Response Ntf(IMessage message)
     {
         return new Response(message);
     }

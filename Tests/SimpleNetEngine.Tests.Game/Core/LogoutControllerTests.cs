@@ -73,6 +73,7 @@ public class LogoutControllerTests
             _nodeSenderMock.Object,
             _loginHandlerMock.Object,
             _redisMock.Object,
+            Mock.Of<IClientSender>(),
             options,
             TimeProvider.System);
     }

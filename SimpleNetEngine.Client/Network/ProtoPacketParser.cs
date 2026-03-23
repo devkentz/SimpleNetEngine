@@ -10,7 +10,6 @@ using SimpleNetEngine.Protocol.Memory;
 using SimpleNetEngine.Protocol.Packets;
 using SimpleNetEngine.ProtoGenerator;
 using System.Runtime.InteropServices;
-using System.Threading;
 
 namespace SimpleNetEngine.Client.Network
 {
@@ -26,10 +25,6 @@ namespace SimpleNetEngine.Client.Network
 
     public sealed class ProtoPacketParser : IPacketParser<NetworkPacket>, IDisposable
     {
-        private const int TagSize = 16;
-        private const int NonceSize = 12;
-        private const byte DirectionS2C = 1;
-
         private AesGcm? _decryptAesGcm;
         private ulong _decryptCounter;
 
@@ -39,7 +34,7 @@ namespace SimpleNetEngine.Client.Network
         public void SetDecryptionKey(byte[] aesKey)
         {
             _decryptAesGcm?.Dispose();
-            _decryptAesGcm = new AesGcm(aesKey, TagSize);
+            _decryptAesGcm = new AesGcm(aesKey, PacketEncryptor.TagSize);
             _decryptCounter = 0;
         }
 
@@ -69,40 +64,41 @@ namespace SimpleNetEngine.Client.Network
                     var encryptedPacket = buffer.GetReadSpan(totalSize);
                     buffer.ReadAdvance(totalSize);
 
-                    var decryptedPacket = DecryptPacket(encryptedPacket, endPointHeader);
-                    if (decryptedPacket == null)
+                    if (_decryptAesGcm == null ||
+                        !PacketEncryptor.TryDecrypt(encryptedPacket, _decryptAesGcm,
+                            ref _decryptCounter, PacketEncryptor.DirectionS2C,
+                            out var decryptedBuffer, out var decryptedLength))
                         throw new CryptographicException("Decryption failed");
 
                     try
                     {
-                        // 복호화된 패킷에서 헤더 재읽기 (ArrayPool 버퍼는 요청보다 클 수 있으므로 TotalLength로 슬라이스)
-                        var decHeader = MemoryMarshal.Read<EndPointHeader>(decryptedPacket);
-                        var decSpan = decryptedPacket.AsSpan(0, decHeader.TotalLength);
+                        var decSpan = decryptedBuffer.AsSpan(0, decryptedLength);
+                        var decHeader = MemoryMarshal.Read<EndPointHeader>(decSpan);
                         var innerData = decSpan[EndPointHeader.SizeOf..];
 
                         ParseInnerPacket(packets, decHeader, innerData);
                     }
                     finally
                     {
-                        ArrayPool<byte>.Shared.Return(decryptedPacket);
+                        PacketEncryptor.ReturnBuffer(decryptedBuffer);
                     }
 
                     continue;
                 }
 
-                buffer.ReadAdvance(EndPointHeader.SizeOf);
-
                 // Step 2: 압축 또는 평문 패킷 처리
-                var remainingData = totalSize - EndPointHeader.SizeOf;
-                ParseFromBuffer(packets, buffer, endPointHeader, remainingData, totalSize);
+                var fullPacketSpan = buffer.GetReadSpan(totalSize);
+                var bodySpan = fullPacketSpan[EndPointHeader.SizeOf..];
+                buffer.ReadAdvance(totalSize);
+
+                ParseInnerPacket(packets, endPointHeader, bodySpan);
             }
 
             return packets;
         }
 
-        private void ParseInnerPacket(List<NetworkPacket> packets, EndPointHeader endPointHeader, ReadOnlySpan<byte> data)
+        private static void ParseInnerPacket(List<NetworkPacket> packets, EndPointHeader endPointHeader, ReadOnlySpan<byte> data)
         {
-            // 압축된 패킷: LZ4 해제 후 GameHeader + Payload 파싱
             if (endPointHeader.IsCompressed)
             {
                 var originalLength = endPointHeader.OriginalLength;
@@ -131,7 +127,7 @@ namespace SimpleNetEngine.Client.Network
 
         private static void ParseGamePacket(List<NetworkPacket> packets, EndPointHeader endPointHeader, ReadOnlySpan<byte> data)
         {
-            var gameHeader = MemoryMarshal.Read<GameHeader>(data);
+            ref readonly var gameHeader = ref NetHeaderHelper.Peek<GameHeader>(data);
 
             if (endPointHeader.ErrorCode != 0)
             {
@@ -146,101 +142,6 @@ namespace SimpleNetEngine.Client.Network
             var payloadSize = data.Length - GameHeader.SizeOf;
             var message = parser.ParseFrom(data.Slice(GameHeader.SizeOf, payloadSize));
             packets.Add(new NetworkPacket(endPointHeader, gameHeader, message));
-        }
-
-        private void ParseFromBuffer(List<NetworkPacket> packets, ArrayPoolBufferWriter buffer,
-            EndPointHeader endPointHeader, int remainingSize, int totalSize)
-        {
-            // 압축된 패킷
-            if (endPointHeader.IsCompressed)
-            {
-                var compressedData = buffer.GetReadSpan(remainingSize);
-
-                var originalLength = endPointHeader.OriginalLength;
-                if (originalLength <= 0 || originalLength > 1024 * 1024)
-                    throw new InvalidDataException($"Invalid OriginalLength: {originalLength}");
-
-                var decompressedBuffer = ArrayPool<byte>.Shared.Rent(originalLength);
-                try
-                {
-                    var decodedSize = LZ4Codec.Decode(compressedData, decompressedBuffer.AsSpan());
-                    if (decodedSize != originalLength)
-                        throw new InvalidDataException($"Decompression size mismatch: expected={originalLength}, actual={decodedSize}");
-
-                    ParseGamePacket(packets, endPointHeader, decompressedBuffer.AsSpan(0, originalLength));
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(decompressedBuffer);
-                }
-
-                buffer.ReadAdvance(remainingSize);
-            }
-            else
-            {
-                var gameHeader = MemoryMarshal.Read<GameHeader>(buffer.GetReadSpan(GameHeader.SizeOf));
-                buffer.ReadAdvance(GameHeader.SizeOf);
-
-                if (endPointHeader.ErrorCode != 0)
-                {
-                    packets.Add(new NetworkPacket(endPointHeader, gameHeader, null!));
-                    return;
-                }
-
-                var parser = AutoGeneratedParsers.GetParserById(gameHeader.MsgId);
-                if (parser == null)
-                    throw new InvalidDataException($"Unknown packet ID: {gameHeader.MsgId}");
-
-                var payloadSize = totalSize - EndPointHeader.SizeOf - GameHeader.SizeOf;
-                var message = parser.ParseFrom(buffer.GetReadSpan(payloadSize));
-                buffer.ReadAdvance(payloadSize);
-
-                if (message == null)
-                    throw new InvalidCastException($"Cannot cast MsgId:{gameHeader.MsgId} to {nameof(NetworkPacket)}");
-
-                packets.Add(new NetworkPacket(endPointHeader, gameHeader, message));
-            }
-        }
-
-        private byte[]? DecryptPacket(ReadOnlySpan<byte> encryptedPacket, EndPointHeader endPointHeader)
-        {
-            if (_decryptAesGcm == null || encryptedPacket.Length < EndPointHeader.SizeOf + TagSize)
-                return null;
-
-            var tag = encryptedPacket.Slice(EndPointHeader.SizeOf, TagSize);
-            var ciphertext = encryptedPacket[(EndPointHeader.SizeOf + TagSize)..];
-
-            Span<byte> nonce = stackalloc byte[NonceSize];
-            var cnt = Interlocked.Increment(ref _decryptCounter);
-            BinaryPrimitives.WriteUInt64LittleEndian(nonce, cnt);
-            nonce[8] = DirectionS2C;
-
-            var outSize = EndPointHeader.SizeOf + ciphertext.Length;
-            var decryptedBuffer = ArrayPool<byte>.Shared.Rent(outSize);
-            var outSpan = decryptedBuffer.AsSpan();
-
-            // EndPointHeader 복원 (FlagEncrypted 제거)
-            var newHeader = new EndPointHeader
-            {
-                TotalLength = outSize,
-                ErrorCode = endPointHeader.ErrorCode,
-                Flags = (byte)(endPointHeader.Flags & ~EndPointHeader.FlagEncrypted),
-                OriginalLength = endPointHeader.OriginalLength
-            };
-            newHeader.Write(outSpan);
-
-            var plaintextSpan = outSpan.Slice(EndPointHeader.SizeOf, ciphertext.Length);
-
-            try
-            {
-                _decryptAesGcm.Decrypt(nonce, ciphertext, tag, plaintextSpan, encryptedPacket[..EndPointHeader.SizeOf]);
-                return decryptedBuffer;
-            }
-            catch (AuthenticationTagMismatchException)
-            {
-                ArrayPool<byte>.Shared.Return(decryptedBuffer);
-                return null;
-            }
         }
 
         public void Dispose()

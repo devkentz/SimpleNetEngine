@@ -46,15 +46,8 @@ public class GatewayNodeEventHandler : SequentialNodeEventHandler
         {
             try
             {
-                using (_logger.BeginScope(new Dictionary<string, object>
-                {
-                    ["MsgId"] = packet.Header.MsgId,
-                    ["SourceNode"] = packet.Header.Source
-                }))
-                {
-                    await using var scope = _scopeFactory.CreateAsyncScope();
-                    response = await _dispatcher.DispatchAsync(scope.ServiceProvider, packet);
-                }
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                response = await _dispatcher.DispatchAsync(scope.ServiceProvider, packet);
             }
             catch (Exception e)
             {
@@ -72,18 +65,25 @@ public class GatewayNodeEventHandler : SequentialNodeEventHandler
 
         if (remoteNode.ServerType == EServerType.Game)
         {
-            if (remoteNode.ServerInfo.Metadata.TryGetValue(NodeMetadataKeys.GameSessionChannelPort, out var portStr) &&
-                int.TryParse(portStr, out var p2pPort))
+            var metadata = remoteNode.ServerInfo.Metadata;
+
+            if (metadata.TryGetValue(NodeMetadataKeys.GameSessionChannelPort, out var recvPortStr) &&
+                int.TryParse(recvPortStr, out var recvPort) &&
+                metadata.TryGetValue(NodeMetadataKeys.GameSessionChannelSendPort, out var sendPortStr) &&
+                int.TryParse(sendPortStr, out var sendPort))
             {
                 var ip = remoteNode.Address.Replace("tcp://", "").Split(':')[0];
-                var endpoint = $"tcp://{ip}:{p2pPort}";
+                var recvEndpoint = $"tcp://{ip}:{recvPort}";
+                var sendEndpoint = $"tcp://{ip}:{sendPort}";
 
-                _logger.LogInformation("GameServer node {NodeId} joined Service Mesh. Connecting Data Plane to {Endpoint}", remoteNode.Identity, endpoint);
-                _packetRouter.ConnectToGameServer(remoteNode.Identity, endpoint);
+                _logger.LogDebug(
+                    "GameServer node {NodeId} joined. Connecting DataPlane: recv={RecvEp}, send={SendEp}",
+                    remoteNode.Identity, recvEndpoint, sendEndpoint);
+                _packetRouter.ConnectToGameServer(remoteNode.Identity, recvEndpoint, sendEndpoint);
             }
             else
             {
-                _logger.LogWarning("GameServer node {NodeId} joined but no GameSessionChannelPort was found in Metadata.", remoteNode.Identity);
+                _logger.LogWarning("GameServer node {NodeId} joined but GameSessionChannel ports not found in Metadata.", remoteNode.Identity);
             }
         }
     }
@@ -94,7 +94,7 @@ public class GatewayNodeEventHandler : SequentialNodeEventHandler
 
         if (remoteNode.ServerType == EServerType.Game)
         {
-            _logger.LogInformation("GameServer node {NodeId} left Service Mesh. Disconnecting from Data Plane.", remoteNode.Identity);
+            _logger.LogDebug("GameServer node {NodeId} left Service Mesh. Disconnecting from Data Plane.", remoteNode.Identity);
             _packetRouter.DisconnectFromGameServer(remoteNode.Identity);
         }
     }

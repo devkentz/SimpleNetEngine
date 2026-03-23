@@ -319,9 +319,9 @@ internal class MockActor : ISessionActor
     public long GatewayNodeId { get; private set; }
     public ActorState Status { get; set; }
     public Dictionary<string, object> State { get; } = [];
-    private long _sequenceId;
+    private int _sequenceId;
     private Guid _reconnectKey;
-    public long SequenceId => _sequenceId;
+    public int SequenceId => _sequenceId;
     public Guid ReconnectKey => _reconnectKey;
 
     public bool IsDisposed { get; private set; }
@@ -345,9 +345,14 @@ internal class MockActor : ISessionActor
         GatewayNodeId = gatewayNodeId;
     }
 
-    public long NextSequenceId()
+    public void UpdateRouting(long gatewayNodeId, ushort lastClientSequenceId)
     {
-        return Interlocked.Increment(ref _sequenceId);
+        GatewayNodeId = gatewayNodeId;
+    }
+
+    public ushort NextSequenceId()
+    {
+        return (ushort)Interlocked.Increment(ref _sequenceId);
     }
 
     public Guid RegenerateReconnectKey()

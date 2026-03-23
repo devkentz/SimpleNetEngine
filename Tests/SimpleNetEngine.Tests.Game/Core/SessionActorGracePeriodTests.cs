@@ -22,7 +22,7 @@ public class SessionActorGracePeriodTests
             gatewayNodeId: 200,
             scopeFactory: Mock.Of<IServiceScopeFactory>(),
             dispatcher: Mock.Of<IMessageDispatcher>(),
-            pipeline: new MiddlewarePipelineFactory(Mock.Of<ILogger<MiddlewarePipeline>>()).CreateDefaultPipeline(),
+            pipeline: new MiddlewarePipelineFactory(Enumerable.Empty<IPacketMiddleware>()).CreateDefaultPipeline(),
             logger: Mock.Of<ILogger>());
     }
 

@@ -52,8 +52,5 @@
 <!--        <ProjectReference Include="..\PacketParserGenerator\PacketParserGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />-->
     </ItemGroup>
 
-    <ItemGroup>
-        <Reference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
-    </ItemGroup>
 
 </Project>

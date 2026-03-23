@@ -14,6 +14,10 @@ message HandshakeReq {
 message HandshakeRes {
   bytes server_ephemeral_public_key = 3;       // Gateway ECDH P-256 공개키 (DER) — 클라이언트가 SharedSecret 도출에 사용
   bytes server_ephemeral_signature = 4;        // ECDSA P-256 서명 (Gateway 장기 서명키로 ECDH 공개키에 서명) — MITM 방지
+
+  // 서버 옵션 (클라이언트가 이 값을 준수해야 함)
+  bool encryption_enabled = 5;                 // 암호화 활성화 여부 (true면 이후 모든 패킷 암호화 필수)
+  uint32 ping_interval_ms = 6;                 // Idle Ping 전송 간격 (ms). 0이면 클라이언트 Ping 비활성화
 }
 
 // 로그인 요청 (credential은 앱 정의 protobuf 메시지의 직렬화 바이트)
@@ -31,7 +35,8 @@ message LoginGameRes {
 // 재접속 요청 (클라이언트 → GameServer, Authenticating 상태에서)
 message ReconnectReq {
   string ReconnectKey = 1;
-  int64 LastSequenceId = 2;
+  uint32 LastServerSequenceId = 2;   // 클라이언트가 마지막으로 수신한 서버 SequenceId
+  uint32 LastClientSequenceId = 3;   // 클라이언트가 마지막으로 송신한 자신의 SequenceId
 }
 
 // 재접속 응답
@@ -39,12 +44,29 @@ message ReconnectRes {
   bool Success = 1;
   string NewReconnectKey = 3;
   string ErrorMessage = 4;
-  bool RequiresRetry = 5;       // true면 클라이언트가 ReconnectReq를 재전송해야 함 (Cross-Node Re-route)
+  bool RequiresRetry = 5;            // true면 클라이언트가 ReconnectReq를 재전송해야 함 (Cross-Node Re-route)
+  uint32 ServerSequenceId = 6;       // 서버의 현재 SequenceId (클라이언트 gap 감지용)
+  uint32 ClientNextSequenceId = 7;   // 클라이언트가 사용할 다음 SequenceId
+  bool RequiresRelogin = 8;          // true면 세션 만료 — 클라이언트가 LoginGameReq로 재로그인해야 함
 }
 
 // GameServer → Client: Actor 생성 완료 알림 (GSC 경유)
 // 클라이언트는 이 메시지를 수신한 후 HandshakeReq를 전송해야 함
 message ReadyToHandshakeNtf {
+}
+
+// GameServer → Client: Kickout 알림 (GSC 경유)
+// 중복 로그인 등으로 인한 강제 퇴장 시 Actor 제거 전에 전송
+// 클라이언트는 이 메시지를 수신하면 연결 종료를 예상해야 함
+message KickoutNtf {
+  EKickoutReason Reason = 1;
+}
+
+enum EKickoutReason {
+  KICKOUT_REASON_UNSPECIFIED = 0;
+  DUPLICATE_LOGIN = 1;
+  ADMIN_KICK = 2;
+  TIMEOUT = 3;
 }
 
 // 로그아웃 요청 (클라이언트 → GameServer, Active 상태에서만)
@@ -56,15 +78,26 @@ message LogoutRes {
   bool Success = 1;
 }
 
-// Heartbeat — Gateway 주도 (I/O 레벨 liveness 체크)
-// Gateway가 주기적으로 PingReq 전송, 클라이언트가 PongRes 응답
-// PongTimeout 내 미응답 → TCP 강제 종료
+// Heartbeat — Client-driven Idle Ping
+// 클라이언트가 idle 시 전송, GameServer가 PongRes 응답
 message PingReq {
   int64 Timestamp = 1;
 }
 
 message PongRes {
   int64 Timestamp = 1;
+}
+
+// TimeSync — NTP 스타일 서버-클라이언트 시간 동기화
+// 10초 주기로 클라이언트가 강제 전송 (Idle Ping과 독립)
+// offset = ServerTimestamp - (ClientSendTimestamp + RTT/2)
+message TimeSyncReq {
+  int64 ClientSendTimestamp = 1;  // 클라이언트 UTC 전송 시각 (ms)
+}
+
+message TimeSyncRes {
+  int64 ClientSendTimestamp = 1;  // 클라이언트가 보낸 원본 값 echo
+  int64 ServerTimestamp = 2;      // 서버 UTC 시각 (ms)
 }
 
 // 범용 에러 응답

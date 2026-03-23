@@ -7,8 +7,8 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <Protobuf Include="*.proto" GrpcServices="None"/>
-        <PackageReference Include="Google.Protobuf"/>
+        <Protobuf Include="*.proto" GrpcServices="None" />
+        <PackageReference Include="Google.Protobuf" />
         <PackageReference Include="Grpc.Tools">
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
             <PrivateAssets>all</PrivateAssets>
@@ -16,10 +16,12 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\PacketParserGenerator\PacketParserGenerator.csproj"
-                          OutputItemType="Analyzer"
-                          ReferenceOutputAssembly="false"/>
+        <ProjectReference Include="..\..\PacketParserGenerator\PacketParserGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 
         <ProjectReference Include="..\..\SimpleNetEngine.ProtoGenerator\SimpleNetEngine.ProtoGenerator.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Protobuf Update="sample_node.proto" GrpcServices="Client" />
     </ItemGroup>
 </Project>

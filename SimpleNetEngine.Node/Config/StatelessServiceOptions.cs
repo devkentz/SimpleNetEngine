@@ -1,4 +1,5 @@
 using Internal.Protocol;
+using SimpleNetEngine.Protocol.Utils;
 
 namespace SimpleNetEngine.Node.Config;
 
@@ -44,7 +45,7 @@ public class StatelessServiceOptions
             Port = ServiceMeshPort,
             ServerType = EServerType.Api,
             Name = Name,
-            Host = AllowDynamicPort ? "127.0.0.1" : "",
+            Host = AllowDynamicPort ? NetworkHelper.GetLocalIpAddress() : "",
             RedisConnectionString = RedisConnectionString,
         };
     }

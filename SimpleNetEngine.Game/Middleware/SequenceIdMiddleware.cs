@@ -21,7 +21,7 @@ public class SequenceIdMiddleware : IPacketMiddleware
 
     public async Task InvokeAsync(PacketContext context, Func<Task> next)
     {
-        if (context.Items.TryGetValue("Actor", out var actorObj) && actorObj is SessionActor actor)
+        if (context.Actor is SessionActor actor)
         {
             if (!actor.ValidateAndUpdateSequenceId(context.SequenceId))
             {

@@ -91,6 +91,28 @@ namespace PacketParserGenerator
                 .OrderBy(g => g.Key)
                 .ToList();
 
+            // MsgId 해시 충돌 검증 (FNV-1a 32bit)
+            var idToType = new Dictionary<int, string>();
+            foreach (var type in distinctTypes)
+            {
+                int id = GetFnv1a32(type.FullName);
+                if (idToType.TryGetValue(id, out var existing))
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        new DiagnosticDescriptor(
+                            "SNEG001",
+                            "MsgId hash collision detected",
+                            "FNV-1a hash collision: '{0}' and '{1}' both produce MsgId {2}",
+                            "PacketParserGenerator",
+                            DiagnosticSeverity.Error,
+                            isEnabledByDefault: true),
+                        Location.None,
+                        type.FullName, existing, id));
+                    return;
+                }
+                idToType[id] = type.FullName;
+            }
+
             // 1. 각 네임스페이스별 MsgId 확장 (partial class)
             // MsgId = FNV-1a 32bit hash of FullName (MagicOnion 방식, 어셈블리 간 충돌 방지)
             foreach (var group in protoGroups)
@@ -172,7 +194,7 @@ namespace PacketParserGenerator
         }
 
         /// <summary>
-        /// FNV-1a 32bit hash (MagicOnion 방식)
+        /// FNV-1a 32bit hash
         /// FullName을 입력받아 양수 int를 반환
         /// </summary>
         private static int GetFnv1a32(string text)

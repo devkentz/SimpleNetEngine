@@ -1,3 +1,4 @@
+using Game.Protocol;
 using SimpleNetEngine.Game.Actor;
 
 namespace SimpleNetEngine.Game.Session;
@@ -23,9 +24,9 @@ public interface ILoginHandler
 
     /// <summary>
     /// 재접속 성공 시 (Disconnected → Active 복원)
-    /// 상태 스냅샷 전송, 일시정지 해제 등
+    /// gapInfo를 확인하여 유실 패킷 대응 (상태 스냅샷 재전송, 클라이언트 재전송 요청 등)
     /// </summary>
-    Task OnReconnectedAsync(ISessionActor actor);
+    Task OnReconnectedAsync(ISessionActor actor, ReconnectGapInfo gapInfo);
 
     /// <summary>
     /// Kickout 수신 시 (중복 로그인에 의한 강제 퇴장)
@@ -33,7 +34,7 @@ public interface ILoginHandler
     /// - TerminateSession: 즉시 Actor 제거 (재접속 불가)
     /// - AllowSessionResume: Disconnected 전이 + Grace Period (재접속 허용)
     /// </summary>
-    Task<DisconnectAction> OnKickoutAsync(ISessionActor actor, KickoutReason reason);
+    Task<DisconnectAction> OnKickoutAsync(ISessionActor actor, EKickoutReason reason);
 
     /// <summary>
     /// 비활성 타임아웃 시 DisconnectAction 결정
@@ -73,11 +74,29 @@ public readonly record struct LoginAuthResult
 }
 
 /// <summary>
-/// Kickout 사유
+/// 재접속 시 SequenceId gap 정보
+/// 앱 개발자가 유실 패킷을 감지하고 대응할 수 있도록 제공
 /// </summary>
-public enum KickoutReason
+/// <param name="ClientReportedLastServerSeqId">클라이언트가 마지막으로 수신한 서버 SequenceId</param>
+/// <param name="ServerCurrentSeqId">서버의 현재 SequenceId (Actor가 발급한 마지막 값)</param>
+/// <param name="ClientReportedLastClientSeqId">클라이언트가 마지막으로 송신한 자신의 SequenceId</param>
+/// <param name="ServerLastValidatedClientSeqId">서버가 마지막으로 검증한 클라이언트 SequenceId</param>
+public readonly record struct ReconnectGapInfo(
+    ushort ClientReportedLastServerSeqId,
+    ushort ServerCurrentSeqId,
+    ushort ClientReportedLastClientSeqId,
+    ushort ServerLastValidatedClientSeqId)
 {
-    DuplicateLogin,
-    AdminKick,
-    Timeout
+    /// <summary>
+    /// 서버→클라이언트 방향 유실 패킷 존재 여부
+    /// true면 서버가 보냈지만 클라이언트가 못 받은 패킷이 있음 → 상태 스냅샷 재전송 고려
+    /// </summary>
+    public bool HasServerToClientGap => ServerCurrentSeqId != ClientReportedLastServerSeqId;
+
+    /// <summary>
+    /// 클라이언트→서버 방향 유실 패킷 존재 여부
+    /// true면 클라이언트가 보냈지만 서버가 못 받은 패킷이 있음 → 클라이언트 재전송 또는 무시
+    /// </summary>
+    public bool HasClientToServerGap => ClientReportedLastClientSeqId != ServerLastValidatedClientSeqId;
 }
+

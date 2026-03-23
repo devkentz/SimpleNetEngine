@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using SimpleNetEngine.Game.Options;
@@ -69,7 +70,7 @@ public static class GameServiceExtensions
     /// <summary>
     /// GameServer 서비스를 DI 컨테이너에 등록
     /// </summary>
-    public static IServiceCollection AddGameServices(
+    private static IServiceCollection AddGameServices(
         this IServiceCollection services,
         Action<GameOptions> configureOptions)
     {
@@ -100,12 +101,18 @@ public static class GameServiceExtensions
         services.AddSingleton<GatewayDisconnectQueue>();
         services.AddSingleton<ActorDisconnectHandler>();
 
+        // PacketContext Scoped DI (ASP.NET Core HttpContext 패턴)
+        // SessionActor.ProcessMessageAsync에서 Holder에 값 설정 → Controller에서 PacketContext 직접 주입
+        services.AddScoped<PacketContextHolder>();
+        services.AddScoped(sp =>
+            sp.GetRequiredService<PacketContextHolder>().Context
+            ?? throw new InvalidOperationException("PacketContext is not available outside of packet processing scope."));
+
         // Middleware Pipeline (AOP) - Actor 내부에서 실행됨
         // 실행 순서: Exception → SequenceId → Logging → Performance
         services.AddSingleton<MiddlewarePipelineFactory>();
         services.AddUserMiddleware<ExceptionHandlingMiddleware>(ServiceLifetime.Singleton);
         services.AddUserMiddleware<SequenceIdMiddleware>(ServiceLifetime.Singleton);
-        services.AddUserMiddleware<LoggingMiddleware>(ServiceLifetime.Singleton);
         services.AddUserMiddleware<PerformanceMiddleware>(ServiceLifetime.Singleton);
 
         // 핵심 서비스
@@ -113,6 +120,7 @@ public static class GameServiceExtensions
         services.AddSingleton<IClientPacketHandler>(sp => sp.GetRequiredService<GameServerHub>());
 
         services.AddSingleton<GameSessionChannelListener>();
+        services.AddSingleton<IClientSender, ClientSender>();
 
         // 라이브러리 내장 UserController (Source Generator 미스캔 → 수동 등록)
         services.AddScoped<HandshakeController>();
@@ -151,7 +159,7 @@ public static class GameServiceExtensions
     {
         services.AddSingleton<IMessageDispatcher>(sp =>
         {
-            var dispatcher = new MessageDispatcher();
+            var dispatcher = new MessageDispatcher(sp.GetRequiredService<ILogger<MessageDispatcher>>());
 
             // 라이브러리 내장 핸들러 (HandshakeController, LoginController 등)
             RegisterBuiltInHandlers(dispatcher);

@@ -8,6 +8,7 @@ using Moq;
 using SimpleNetEngine.Game.Actor;
 using SimpleNetEngine.Game.Controllers;
 using SimpleNetEngine.Game.Core;
+using SimpleNetEngine.Game.Middleware;
 using SimpleNetEngine.Game.Network;
 using SimpleNetEngine.Game.Options;
 using SimpleNetEngine.Game.Session;
@@ -35,6 +36,7 @@ public class LoginControllerTests
     private readonly Mock<INodeSender> _nodeSenderMock = new();
     private readonly Mock<ILoginHandler> _loginHandlerMock = new();
     private readonly Mock<IDatabase> _redisMock = new();
+    private readonly Mock<IClientSender> _clientSenderMock = new();
     private readonly LoginController _sut;
 
     public LoginControllerTests()
@@ -57,7 +59,7 @@ public class LoginControllerTests
             .Returns(Task.CompletedTask);
 
         _loginHandlerMock
-            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<KickoutReason>()))
+            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<EKickoutReason>()))
             .ReturnsAsync(DisconnectAction.TerminateSession);
 
         // Redis Lock 기본 설정: 항상 성공
@@ -78,6 +80,7 @@ public class LoginControllerTests
             _nodeSenderMock.Object,
             _loginHandlerMock.Object,
             _redisMock.Object,
+            _clientSenderMock.Object,
             options,
             TimeProvider.System);
     }
@@ -213,7 +216,7 @@ public class LoginControllerTests
             "OnKickoutAsync must be called through oldActor.ExecuteAsync for thread safety");
 
         _loginHandlerMock.Verify(
-            x => x.OnKickoutAsync(oldActorMock.Object, KickoutReason.DuplicateLogin),
+            x => x.OnKickoutAsync(oldActorMock.Object, EKickoutReason.DuplicateLogin),
             Times.Once);
 
         // OnLoginSuccessAsync도 새 Actor에 대해 호출됨
@@ -250,6 +253,60 @@ public class LoginControllerTests
 
         // Actor 상태 변경 없음
         actor.Object.Status.Should().Be(ActorState.Authenticating);
+    }
+
+    [Fact]
+    public async Task HandleLogin_SameNodeDuplicate_ShouldSendKickoutNtf()
+    {
+        // Arrange
+        var oldSessionId = 3000L;
+        var actor = CreateMockActor();
+        var oldActorMock = new Mock<ISessionActor>();
+        oldActorMock.Setup(a => a.ActorId).Returns(oldSessionId);
+        oldActorMock.Setup(a => a.GatewayNodeId).Returns(GatewayNodeId);
+        oldActorMock.Setup(a => a.NextSequenceId()).Returns(1);
+        oldActorMock
+            .Setup(a => a.ExecuteAsync(It.IsAny<Func<IServiceProvider, Task>>()))
+            .Returns<Func<IServiceProvider, Task>>(callback => callback(null!));
+
+        var existingSession = new SessionInfo
+        {
+            GameServerNodeId = GameNodeId,
+            SessionId = oldSessionId,
+            GatewayNodeId = GatewayNodeId,
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            LastActivityUtc = DateTimeOffset.UtcNow.AddSeconds(-30)
+        };
+
+        _sessionStoreMock
+            .Setup(x => x.GetSessionAsync(UserId))
+            .ReturnsAsync(existingSession);
+
+        _actorManagerMock
+            .Setup(x => x.GetActor(oldSessionId))
+            .Returns(Result<ISessionActor>.Ok(oldActorMock.Object));
+
+        _actorManagerMock
+            .Setup(x => x.RemoveActor(oldSessionId))
+            .Returns(Result.Ok());
+
+        _nodeSenderMock
+            .Setup(x => x.RequestAsync<ServiceMeshDisconnectClientReq, ServiceMeshDisconnectClientRes>(
+                It.IsAny<long>(), It.IsAny<long>(), It.IsAny<ServiceMeshDisconnectClientReq>()))
+            .ReturnsAsync(new ServiceMeshDisconnectClientRes { Success = true });
+
+        var req = new LoginGameReq { Credential = Google.Protobuf.ByteString.CopyFromUtf8(UserId.ToString()) };
+
+        // Act
+        await _sut.HandleLogin(actor.Object, req);
+
+        // Assert: KickoutNtf가 기존 Actor에게 전송됨
+        _clientSenderMock.Verify(
+            x => x.SendNtf(
+                It.Is<ISessionActor>(a => a.ActorId == oldSessionId),
+                It.Is<Response>(r => r.Message is KickoutNtf)),
+            Times.Once,
+            "KickoutNtf must be sent to old client before actor removal");
     }
 
     #endregion

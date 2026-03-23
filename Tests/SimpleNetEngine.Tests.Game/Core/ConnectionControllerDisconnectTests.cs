@@ -48,16 +48,27 @@ public class ConnectionControllerDisconnectTests
             _sessionStoreMock.Object,
             NullLogger<ActorDisconnectHandler>.Instance);
 
+        // IServiceScopeFactory → ILoginHandler resolve mock
+        var serviceProviderMock = new Mock<IServiceProvider>();
+        serviceProviderMock
+            .Setup(sp => sp.GetService(typeof(ILoginHandler)))
+            .Returns(_loginHandlerMock.Object);
+
+        var scopeMock = new Mock<IServiceScope>();
+        scopeMock.Setup(s => s.ServiceProvider).Returns(serviceProviderMock.Object);
+
+        var scopeFactoryMock = new Mock<IServiceScopeFactory>();
+        scopeFactoryMock.Setup(f => f.CreateScope()).Returns(scopeMock.Object);
+
         _sut = new ConnectionController(
             Mock.Of<ILogger<ConnectionController>>(),
             _actorManagerMock.Object,
             new GatewayDisconnectQueue(NullLogger<GatewayDisconnectQueue>.Instance),
             disconnectHandler,
-            _loginHandlerMock.Object,
             new SessionActorFactory(),
             Mock.Of<IMessageDispatcher>(),
-            Mock.Of<IServiceScopeFactory>(),
-            new MiddlewarePipelineFactory(Mock.Of<ILogger<MiddlewarePipeline>>()),
+            scopeFactoryMock.Object,
+            new MiddlewarePipelineFactory(Enumerable.Empty<IPacketMiddleware>()),
             null!); // GameSessionChannelListener은 HandleClientDisconnected에서 미사용
     }
 

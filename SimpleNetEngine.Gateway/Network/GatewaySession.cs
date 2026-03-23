@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using SimpleNetEngine.Protocol.Memory;
 using SimpleNetEngine.Protocol.Packets;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Google.Protobuf;
 using Internal.Protocol;
@@ -42,6 +43,11 @@ public class GatewaySession : TcpSession
     // --- 암호화 (has-a, nullable) ---
     private readonly SessionCrypto? _crypto;
 
+    // --- Rate Limit (초당 패킷 수 제한) ---
+    private readonly int _maxPacketsPerSecond;
+    private long _rateLimitWindowTicks;
+    private int _rateLimitCount;
+
     public Guid SocketId => this.Id;
 
     /// <summary>
@@ -63,6 +69,7 @@ public class GatewaySession : TcpSession
         INodeSender nodeSender,
         long gatewayNodeId,
         UniqueIdGenerator idGenerator,
+        int maxPacketsPerSecond,
         SessionCrypto? crypto = null) : base(server)
     {
         _logger = logger;
@@ -70,22 +77,27 @@ public class GatewaySession : TcpSession
         _nodeSender = nodeSender;
         _idGenerator = idGenerator;
         _gatewayNodeId = gatewayNodeId;
+        _maxPacketsPerSecond = maxPacketsPerSecond;
         _crypto = crypto;
     }
 
     protected override void OnConnected()
     {
-        _logger.LogInformation("Client connected: SocketId={SocketId} from {RemoteEndPoint}", SocketId, AnonymizeIp(Socket.RemoteEndPoint));
+        _logger.LogDebug("[Session:{SocketId}] Connected from {RemoteEndPoint}", SocketId, AnonymizeIp(Socket.RemoteEndPoint));
 
         _packetRouter.RegisterClientSession(SocketId, this);
 
         var targetNodeId = _packetRouter.GetNextGameServerNodeId();
+
         if (targetNodeId != 0)
         {
             // SessionId를 Gateway에서 즉시 발급하여 NodeId와 함께 고정
             var sessionId = GenerateSessionId();
             Volatile.Write(ref _pinnedGameServerNodeId, targetNodeId);
             Volatile.Write(ref _gameSessionId, sessionId);
+
+            _logger.LogDebug("[Session:{SocketId}] Pinned: NodeId={NodeId}, SessionId={SessionId}",
+                SocketId, targetNodeId, sessionId);
 
             // SessionId → Session 매핑 등록 (GameServer가 SocketId 없이 SessionId로 응답 라우팅)
             _packetRouter.RegisterSessionId(sessionId, this);
@@ -97,8 +109,7 @@ public class GatewaySession : TcpSession
         }
         else
         {
-            _logger.LogWarning("No GameServer available to pin for SocketId={SocketId}", SocketId);
-            Disconnect();
+            Kick(ErrorCode.GatewayGameServerUnreachable);
         }
     }
 
@@ -126,7 +137,7 @@ public class GatewaySession : TcpSession
 
             if (res.Success)
             {
-                _logger.LogInformation(
+                _logger.LogDebug(
                     "NtfNewUser success: SocketId={SocketId}, SessionId={SessionId}, GameServer={NodeId}",
                     SocketId, sessionId, targetNodeId);
             }
@@ -135,7 +146,7 @@ public class GatewaySession : TcpSession
                 _logger.LogError(
                     "NtfNewUser failed: SocketId={SocketId}, SessionId={SessionId}, GameServer={NodeId}",
                     SocketId, sessionId, targetNodeId);
-                Disconnect();
+                Kick(ErrorCode.GatewayGameServerUnreachable);
             }
         }
         catch (OperationCanceledException)
@@ -175,14 +186,14 @@ public class GatewaySession : TcpSession
 
     protected override void OnDisconnected()
     {
-        _logger.LogInformation("Client disconnected: SocketId={SocketId}", SocketId);
+        var sessionId = Volatile.Read(ref _gameSessionId);
+        var pinnedNodeId = Volatile.Read(ref _pinnedGameServerNodeId);
+        _logger.LogDebug("[Session:{SocketId}] Disconnected (NodeId={NodeId}, SessionId={SessionId})",
+            SocketId, pinnedNodeId, sessionId);
 
         // 리소스 정리
         _receiveBuffer.Dispose();
         _crypto?.Dispose();
-
-        var sessionId = Volatile.Read(ref _gameSessionId);
-        var pinnedNodeId = Volatile.Read(ref _pinnedGameServerNodeId);
 
         Unpin();
         _packetRouter.OnClientDisconnected(SocketId, sessionId);
@@ -207,7 +218,7 @@ public class GatewaySession : TcpSession
                 targetNodeId,
                 req);
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "ClientDisconnected sent: SessionId={SessionId}, GameServer={NodeId}",
                 sessionId, targetNodeId);
         }
@@ -231,9 +242,7 @@ public class GatewaySession : TcpSession
         if (size <= 0 || size > PacketDefine.MaxPacketSize ||
             offset < 0 || offset > int.MaxValue || size > int.MaxValue)
         {
-            _logger.LogWarning(
-                "Invalid packet: offset={Offset}, size={Size}, SocketId={SocketId}",
-                offset, size, SocketId);
+            Log.InvalidPacket(_logger, offset, size, SocketId);
             Disconnect();
             return;
         }
@@ -243,9 +252,7 @@ public class GatewaySession : TcpSession
 
         if (intOffset + intSize > buffer.Length)
         {
-            _logger.LogError(
-                "Packet boundary violation: offset={Offset}, size={Size}, bufferLength={BufferLength}, SocketId={SocketId}",
-                offset, size, buffer.Length, SocketId);
+            Log.PacketBoundaryViolation(_logger, offset, size, buffer.Length, SocketId);
             Disconnect();
             return;
         }
@@ -265,7 +272,7 @@ public class GatewaySession : TcpSession
             int totalSize = BinaryPrimitives.ReadInt32LittleEndian(bufferedSpan);
             if (totalSize <= 0 || totalSize > PacketDefine.MaxPacketSize)
             {
-                _logger.LogWarning("Invalid TotalLength: {TotalLength}, SocketId={SocketId}", totalSize, SocketId);
+                Log.InvalidTotalLength(_logger, totalSize, SocketId);
                 Disconnect();
                 return;
             }
@@ -273,6 +280,25 @@ public class GatewaySession : TcpSession
             // 완전한 패킷이 아직 도착하지 않음
             if (bufferedSpan.Length < totalSize)
                 break;
+
+            // Rate Limit 체크 (zero-allocation)
+            if (_maxPacketsPerSecond > 0)
+            {
+                var now = Stopwatch.GetTimestamp();
+                var elapsed = Stopwatch.GetElapsedTime(_rateLimitWindowTicks, now);
+                if (elapsed.TotalSeconds >= 1.0)
+                {
+                    _rateLimitWindowTicks = now;
+                    _rateLimitCount = 0;
+                }
+
+                if (++_rateLimitCount > _maxPacketsPerSecond)
+                {
+                    Log.RateLimitExceeded(_logger, SocketId, _rateLimitCount);
+                    Kick(ErrorCode.GatewayRateLimitExceeded);
+                    return;
+                }
+            }
 
             // 완전한 패킷 하나 추출
             var packetSpan = bufferedSpan[..totalSize];
@@ -292,18 +318,23 @@ public class GatewaySession : TcpSession
 
         if (targetNodeId == 0 || sessionId == 0)
         {
-            _logger.LogWarning(
-                "Packet dropped (not ready): SocketId={SocketId}, NodeId={NodeId}, SessionId={SessionId}",
-                SocketId, targetNodeId, sessionId);
+            var hasEpHeader = NetHeaderHelper.HasHeader<EndPointHeader>(packetSpan);
+            ref readonly var epHeader = ref (hasEpHeader
+                ? ref NetHeaderHelper.Peek<EndPointHeader>(packetSpan)
+                : ref Unsafe.NullRef<EndPointHeader>());
+
+            Log.PacketDroppedNotReady(_logger, SocketId, targetNodeId, sessionId, packetSpan.Length);
             return;
         }
 
-        using var activity = TelemetryHelper.Source.StartActivity("Gateway.OnReceived", ActivityKind.Server);
+        using var activity = TelemetryHelper.Source.HasListeners()
+            ? TelemetryHelper.Source.StartActivity("GSC.Recv", ActivityKind.Server)
+            : null;
         if (activity != null)
         {
-            activity.SetTag("network.protocol", "tcp");
+            activity.SetTag("rpc.system", "tcp");
             activity.SetTag("session.id", sessionId);
-            activity.SetTag("packet.size", packetSpan.Length);
+            activity.SetTag("message.size", packetSpan.Length);
         }
 
         try
@@ -323,14 +354,14 @@ public class GatewaySession : TcpSession
                     {
                         if (_crypto == null || !_crypto.IsActive)
                         {
-                            _logger.LogWarning("Encrypted packet but no key: SocketId={SocketId}", SocketId);
+                            Log.EncryptedNoKey(_logger, SocketId);
                             Disconnect();
                             return;
                         }
 
                         if (!_crypto.TryDecrypt(currentSpan, out decryptedBuffer, out var decryptedLength))
                         {
-                            _logger.LogWarning("Decryption failed: SocketId={SocketId}, SessionId={SessionId}", SocketId, sessionId);
+                            Log.DecryptionFailed(_logger, SocketId, sessionId);
                             Disconnect();
                             return;
                         }
@@ -344,7 +375,7 @@ public class GatewaySession : TcpSession
                         if (!PacketCompressor.TryDecompress(currentSpan,
                                 out decompressedBuffer, out var decompressedLength))
                         {
-                            _logger.LogWarning("Decompression failed: SocketId={SocketId}, SessionId={SessionId}", SocketId, sessionId);
+                            Log.DecompressionFailed(_logger, SocketId, sessionId);
                             Disconnect();
                             return;
                         }
@@ -360,9 +391,9 @@ public class GatewaySession : TcpSession
                         NetHeaderHelper.GetPayload<EndPointHeader>(currentSpan), out var gameHeader))
                 {
                     var msgName = AutoGeneratedParsers.GetNameById(gameHeader.MsgId);
-                    activity.DisplayName = $"Gateway.OnReceived {msgName}";
-                    activity.SetTag("message.name", msgName);
-                    activity.SetTag("message.id", gameHeader.MsgId);
+                    activity.DisplayName = $"GSC.Recv {msgName}";
+                    activity.SetTag("rpc.method", msgName);
+                    activity.SetTag("rpc.message.id", gameHeader.MsgId);
                 }
 
                 _packetRouter.ForwardToGameServer(currentSpan, targetNodeId, sessionId);
@@ -378,7 +409,7 @@ public class GatewaySession : TcpSession
             _logger.LogError(ex,
                 "Failed to forward packet (routing error): SocketId={SocketId}, NodeId={NodeId}, SessionId={SessionId}",
                 SocketId, targetNodeId, sessionId);
-            Disconnect();
+            Kick(ErrorCode.GatewayGameServerUnreachable);
         }
     }
 
@@ -395,7 +426,7 @@ public class GatewaySession : TcpSession
         var oldNodeId = Volatile.Read(ref _pinnedGameServerNodeId);
         Volatile.Write(ref _pinnedGameServerNodeId, newTargetNodeId);
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Session rerouted: SocketId={SocketId}, OldNodeId={OldNodeId}, NewNodeId={NewNodeId}, GameSessionId={SessionId}",
             SocketId, oldNodeId, newTargetNodeId, Volatile.Read(ref _gameSessionId));
     }
@@ -416,15 +447,11 @@ public class GatewaySession : TcpSession
     /// </summary>
     public void SendFromGameServer(ReadOnlySpan<byte> data)
     {
-        _logger.LogDebug(
-            "SendFromGameServer: SocketId={SocketId}, PacketSize={Size}, IsConnected={IsConnected}",
-            SocketId, data.Length, IsConnected);
+        Log.SendFromGameServer(_logger, SocketId, data.Length, IsConnected);
 
         if (!SendAsync(data))
         {
-            _logger.LogError(
-                "Failed to send packet to client: SocketId={SocketId}, PacketSize={Size}",
-                SocketId, data.Length);
+            Log.SendToClientFailed(_logger, SocketId, GameSessionId, data.Length);
             Disconnect();
         }
     }
@@ -475,9 +502,23 @@ public class GatewaySession : TcpSession
         }
 
         _crypto.DeriveAndActivateEncryption(clientEphemeralPublicKeyDer);
-        _logger.LogInformation("Encryption activated: SocketId={SocketId}", SocketId);
+        _logger.LogDebug("Encryption activated: SocketId={SocketId}", SocketId);
     }
 
+
+    /// <summary>
+    /// 세션 강제 종료: 에러코드 전송 → 연결 해제
+    /// Gateway I/O 계층 메커니즘 (비즈니스 판단은 호출자 책임)
+    /// </summary>
+    public void Kick(ErrorCode reason)
+    {
+        Log.Kick(_logger, SocketId, reason, GameSessionId);
+
+        if (reason != ErrorCode.None)
+            SendError((short)reason);
+
+        Disconnect();
+    }
 
     /// <summary>
     /// 에러 전용 패킷을 클라이언트로 직접 전송 (GameServer 경유 없음)
@@ -497,9 +538,8 @@ public class GatewaySession : TcpSession
 
         if (!SendAsync(buffer))
         {
-            _logger.LogWarning(
-                "Failed to send error packet to client: SocketId={SocketId}, ErrorCode={ErrorCode}",
-                SocketId, errorCode);
+            Log.SendErrorFailed(_logger, SocketId, errorCode);
         }
     }
+
 }

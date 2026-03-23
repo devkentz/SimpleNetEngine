@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
+using SimpleNetEngine.Protocol.Packets;
 
 namespace SimpleNetEngine.Gateway.Network;
 
@@ -27,6 +28,7 @@ public sealed class SessionCrypto : IDisposable
     private ulong _decryptCounter;
     private volatile bool _encryptionActive;
 
+    private volatile bool _disposed;
     private readonly Lock _lock = new();
 
     // HKDF 파라미터 (클라이언트와 동일해야 함)
@@ -75,6 +77,9 @@ public sealed class SessionCrypto : IDisposable
     /// </summary>
     public void DeriveAndActivateEncryption(byte[] clientEphemeralPublicKeyDer)
     {
+        if (_disposed)
+            return;
+
         using var clientEcdh = ECDiffieHellman.Create();
         clientEcdh.ImportSubjectPublicKeyInfo(clientEphemeralPublicKeyDer, out _);
 
@@ -156,6 +161,7 @@ public sealed class SessionCrypto : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         AesGcm? oldEncrypt, oldDecrypt;
         lock (_lock)
         {

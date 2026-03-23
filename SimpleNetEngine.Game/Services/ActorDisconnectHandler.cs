@@ -40,7 +40,7 @@ public class ActorDisconnectHandler(
         var sessionId = actor.ActorId;
         var userId = actor.UserId;
 
-        logger.LogInformation(
+        logger.LogDebug(
             "Actor transitioned to Disconnected (AllowSessionResume): SessionId={SessionId}, UserId={UserId}",
             sessionId, userId);
 
@@ -52,26 +52,15 @@ public class ActorDisconnectHandler(
     /// InactivityScanner가 actor.ExecuteAsync 내부에서 호출.
     /// OnLogoutAsync → Redis 삭제 → Actor 제거.
     /// </summary>
-    public async Task ExpireGracePeriodAsync(
+    public Task ExpireGracePeriodAsync(
         ISessionActor actor,
         ILoginHandler loginHandler)
     {
-        var sessionId = actor.ActorId;
-        var userId = actor.UserId;
-
-        logger.LogInformation(
+        logger.LogDebug(
             "Grace period expired: SessionId={SessionId}, UserId={UserId}",
-            sessionId, userId);
+            actor.ActorId, actor.UserId);
 
-        await loginHandler.OnLogoutAsync(actor);
-        await sessionStore.DeleteReconnectKeyAsync(actor.ReconnectKey);
-
-        var result = actorManager.UnregisterActor(sessionId);
-        if (result.IsSuccess)
-            disposeQueue.Enqueue(result.Value);
-
-        // 조건부 삭제: 내 SessionId와 일치할 때만 삭제 (다른 노드가 덮어쓴 경우 보호)
-        await sessionStore.DeleteSessionIfMatchAsync(userId, sessionId);
+        return CleanupActorInternalAsync(actor, loginHandler);
     }
 
     /// <summary>
@@ -80,26 +69,29 @@ public class ActorDisconnectHandler(
     /// 반드시 actor.ExecuteAsync 내부에서 호출할 것 (mailbox 스레드 안전성).
     /// Redis 세션 삭제는 조건부: 내 SessionId와 일치할 때만 삭제 (다른 노드가 덮어쓴 경우 보호).
     /// </summary>
-    public async Task TerminateSessionAsync(
+    public Task TerminateSessionAsync(
         ISessionActor actor,
         ILoginHandler loginHandler)
     {
-        var sessionId = actor.ActorId;
-        var userId = actor.UserId;
-
-        logger.LogInformation(
+        logger.LogDebug(
             "Actor terminated (TerminateSession): SessionId={SessionId}, UserId={UserId}",
-            sessionId, userId);
+            actor.ActorId, actor.UserId);
 
+        return CleanupActorInternalAsync(actor, loginHandler);
+    }
+
+    private async Task CleanupActorInternalAsync(
+        ISessionActor actor,
+        ILoginHandler loginHandler)
+    {
         await loginHandler.OnLogoutAsync(actor);
-
         await sessionStore.DeleteReconnectKeyAsync(actor.ReconnectKey);
 
-        var result = actorManager.UnregisterActor(sessionId);
+        var result = actorManager.UnregisterActor(actor.ActorId);
         if (result.IsSuccess)
             disposeQueue.Enqueue(result.Value);
 
         // 조건부 삭제: 내 SessionId와 일치할 때만 삭제 (다른 노드가 덮어쓴 경우 보호)
-        await sessionStore.DeleteSessionIfMatchAsync(userId, sessionId);
+        await sessionStore.DeleteSessionIfMatchAsync(actor.UserId, actor.ActorId);
     }
 }

@@ -27,12 +27,11 @@ public class ConnectionController(
     ISessionActorManager actorManager,
     GatewayDisconnectQueue disconnectQueue,
     ActorDisconnectHandler disconnectHandler,
-    ILoginHandler loginHandler,
     ISessionActorFactory actorFactory,
     IMessageDispatcher messageDispatcher,
     IServiceScopeFactory scopeFactory,
     MiddlewarePipelineFactory pipelineFactory,
-    GameSessionChannelListener gscListener)
+    IClientSender clientSender)
 {
     [NodePacketHandler(ServiceMeshNewUserNtfReq.MsgId)]
     public Task<ServiceMeshNewUserNtfRes> HandleNtfNewUser(ServiceMeshNewUserNtfReq req)
@@ -40,11 +39,11 @@ public class ConnectionController(
         var gatewayNodeId = req.GatewayNodeId;
         var sessionId = req.SessionId;
 
-        logger.LogInformation(
+        logger.LogDebug(
             "NtfNewUser received: Gateway={GatewayNodeId}, SessionId={SessionId}, IsReroute={IsReroute}. Creating anonymous Actor",
             gatewayNodeId, sessionId, req.IsReroute);
 
-        // 1. 익명 Actor 생성 (Gateway가 발급한 SessionId 사용, SocketId 불필요)
+        // 1. 익명 Actor 생성 (Gateway가 발급한 SessionId 사용)
         var actor = actorFactory.Create(
             actorId: sessionId,
             userId: 0,
@@ -87,14 +86,9 @@ public class ConnectionController(
             // 2. ReadyToHandshakeNtf를 GSC 경유로 클라이언트에 전송
             //    GameServer는 SocketId를 모르므로 SessionId 기반 라우팅 사용
             //    Gateway가 SessionId → GatewaySession 매핑으로 올바른 클라이언트에 전달
-            gscListener.SendResponse(
-                gatewayNodeId,
-                sessionId,
-                Response.Ok(new ReadyToHandshakeNtf()),
-                requestId: 0,
-                sequenceId: (ushort)actor.NextSequenceId());
+            clientSender.SendNtf(actor, Response.Ntf(new ReadyToHandshakeNtf()));
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "ReadyToHandshakeNtf sent via GSC: SessionId={SessionId}, Gateway={GatewayNodeId}",
                 sessionId, gatewayNodeId);
         }
@@ -107,7 +101,7 @@ public class ConnectionController(
     {
         var sessionId = req.SessionId;
 
-        logger.LogInformation(
+        logger.LogDebug(
             "ClientDisconnected received: Gateway={GatewayNodeId}, SessionId={SessionId}",
             req.GatewayNodeId, sessionId);
 
@@ -135,6 +129,8 @@ public class ConnectionController(
                 if (actor.Status != ActorState.Active)
                     return;
 
+                using var scope = scopeFactory.CreateScope();
+                var loginHandler = scope.ServiceProvider.GetRequiredService<ILoginHandler>();
                 await disconnectHandler.AllowSessionResumeAsync(actor, loginHandler);
             });
 

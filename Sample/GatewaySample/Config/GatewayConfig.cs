@@ -12,7 +12,7 @@ public class GatewayConfig
     public bool AllowDynamicPort { get; set; } = false;
     public int GameSessionChannelPort { get; set; }
     public int ServiceMeshPort { get; set; }
-    public string RedisConnectionString { get; set; } = "localhost:6379";
+    public string RedisConnectionString { get; set; } = "redis-dev.k8s.home:6379";
 
     /// <summary>
     /// ECDSA P-256 서명 개인키 PEM 파일 경로 (MITM 방지)

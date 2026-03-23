@@ -94,12 +94,15 @@ public class ArrayPoolBufferWriter : IBufferWriter<byte>, IDisposable
         _readIndex = 0;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CompactIfNeeded()
     {
-        // Compact if more than 50% of the buffer has been read
-        if (_readIndex > Capacity / 2)
+        // 모든 데이터 소비 시 인덱스만 리셋 (O(1), BlockCopy 없음)
+        // 잔여 데이터가 있으면 CheckAndResizeBuffer가 write 시점에 지연 compact 수행
+        if (WrittenCount == 0)
         {
-            CompactBuffer();
+            _readIndex = 0;
+            _writeIndex = 0;
         }
     }
 

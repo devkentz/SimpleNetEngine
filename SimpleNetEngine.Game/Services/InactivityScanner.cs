@@ -98,7 +98,7 @@ public class InactivityScanner(
                     if (elapsed <= _gracePeriod)
                         continue;
 
-                    logger.LogInformation(
+                    logger.LogDebug(
                         "Grace period expired: SessionId={SessionId}, UserId={UserId}, Disconnected={DisconnectedSeconds}s",
                         actor.ActorId, actor.UserId, elapsed.TotalSeconds);
 
@@ -111,14 +111,14 @@ public class InactivityScanner(
 
         if (inactiveCount > 0)
         {
-            logger.LogInformation(
+            logger.LogDebug(
                 "InactivityScanner: {Count} client(s) disconnected due to inactivity",
                 inactiveCount);
         }
 
         if (expiredCount > 0)
         {
-            logger.LogInformation(
+            logger.LogDebug(
                 "InactivityScanner: {Count} actor(s) cleaned up after grace period expiry",
                 expiredCount);
         }

@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Game.Protocol;
 using Internal.Protocol;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -51,13 +52,14 @@ public class KickoutControllerTests
             _actorManagerMock.Object,
             disconnectHandler,
             _disconnectQueue,
+            Mock.Of<IClientSender>(),
             _loginHandlerMock.Object);
     }
 
     public KickoutControllerTests()
     {
         _loginHandlerMock
-            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<KickoutReason>()))
+            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<EKickoutReason>()))
             .ReturnsAsync(DisconnectAction.TerminateSession);
     }
 
@@ -96,7 +98,7 @@ public class KickoutControllerTests
         // Arrange
         CreateActorMock();
         _loginHandlerMock
-            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<KickoutReason>()))
+            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<EKickoutReason>()))
             .ReturnsAsync(DisconnectAction.TerminateSession);
 
         // Act
@@ -132,7 +134,7 @@ public class KickoutControllerTests
         // Arrange
         var actorMock = CreateActorMock();
         _loginHandlerMock
-            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<KickoutReason>()))
+            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<EKickoutReason>()))
             .ReturnsAsync(DisconnectAction.AllowSessionResume);
 
         // Act
@@ -153,7 +155,7 @@ public class KickoutControllerTests
         // Arrange
         var actorMock = CreateActorMock();
         _loginHandlerMock
-            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<KickoutReason>()))
+            .Setup(x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<EKickoutReason>()))
             .ReturnsAsync(DisconnectAction.AllowSessionResume);
         _loginHandlerMock
             .Setup(x => x.OnDisconnectedAsync(It.IsAny<ISessionActor>()))
@@ -178,7 +180,7 @@ public class KickoutControllerTests
 
         // Assert: OnKickoutAsync가 actor.ExecuteAsync를 통해 호출됨
         _loginHandlerMock.Verify(
-            x => x.OnKickoutAsync(actorMock.Object, KickoutReason.DuplicateLogin),
+            x => x.OnKickoutAsync(actorMock.Object, EKickoutReason.DuplicateLogin),
             Times.Once);
         res.Success.Should().BeTrue();
     }
@@ -199,7 +201,7 @@ public class KickoutControllerTests
         res.ErrorCode.Should().Be(ServiceMeshKickoutErrorCode.UserNotFound);
 
         _loginHandlerMock.Verify(
-            x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<KickoutReason>()),
+            x => x.OnKickoutAsync(It.IsAny<ISessionActor>(), It.IsAny<EKickoutReason>()),
             Times.Never);
     }
 

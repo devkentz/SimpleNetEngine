@@ -1,4 +1,5 @@
 using SimpleNetEngine.Node.Config;
+using SimpleNetEngine.Protocol.Utils;
 using Internal.Protocol;
 
 namespace SimpleNetEngine.Game.Options;
@@ -9,14 +10,19 @@ namespace SimpleNetEngine.Game.Options;
 public class GameOptions
 {
     /// <summary>
-    /// 노드 고유 식별자 (XxHash64로 NodeId 생성에 사용)
     /// </summary>
     public Guid NodeGuid { get; set; } = Guid.NewGuid();
 
     /// <summary>
-    /// GameSessionChannel Bind 포트 (Gateway 연결용)
+    /// GameSessionChannel 수신 포트 (Gateway → GameServer, 클라이언트 패킷 수신)
     /// </summary>
     public int GameSessionChannelPort { get; set; } = 9001;
+
+    /// <summary>
+    /// GameSessionChannel 송신 포트 (GameServer → Gateway, 서버 응답 전송)
+    /// 0이면 GameSessionChannelPort + 1 자동 할당
+    /// </summary>
+    public int GameSessionChannelSendPort { get; set; } = 0;
 
     /// <summary>
     /// 포트 충돌 시 자동으로 다음 포트 시도 여부
@@ -34,6 +40,19 @@ public class GameOptions
     /// Redis 연결 문자열 (SSOT)
     /// </summary>
     public string RedisConnectionString { get; set; } = "localhost:6379";
+
+    /// <summary>
+    /// 클라이언트 Idle Ping 전송 간격 (Handshake 응답으로 전달).
+    /// 클라이언트는 이 간격마다 PingReq를 자동 전송하여 서버 Inactivity 타임아웃 방지.
+    /// TimeSpan.Zero이면 클라이언트 Ping 비활성화.
+    /// </summary>
+    public TimeSpan ClientPingInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// 암호화 활성화 여부 (Handshake 응답으로 전달).
+    /// true면 ECDH 키 교환 후 모든 패킷 AES-256-GCM 암호화 필수.
+    /// </summary>
+    public bool EncryptionEnabled { get; set; } = true;
 
     /// <summary>
     /// 클라이언트 Inactivity 타임아웃.
@@ -63,13 +82,15 @@ public class GameOptions
             NodeGuid = NodeGuid,
             Port = ServiceMeshPort,
             ServerType = EServerType.Game,
-            Host = "127.0.0.1",
+            Host = NetworkHelper.GetLocalIpAddress(),
             RedisConnectionString = RedisConnectionString
         };
 
         // GameSessionChannel 포트를 메타데이터에 추가 (Gateway가 연결할 때 사용)
         nodeConfig.Metadata[global::SimpleNetEngine.Node.Core.NodeMetadataKeys.GameSessionChannelPort] =
             GameSessionChannelPort.ToString();
+        nodeConfig.Metadata[global::SimpleNetEngine.Node.Core.NodeMetadataKeys.GameSessionChannelSendPort] =
+            (GameSessionChannelSendPort > 0 ? GameSessionChannelSendPort : GameSessionChannelPort + 1).ToString();
 
         return nodeConfig;
     }

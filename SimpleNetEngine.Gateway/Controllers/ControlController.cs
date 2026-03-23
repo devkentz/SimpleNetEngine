@@ -18,7 +18,7 @@ public class ControlController(ILogger<ControlController> logger, GatewaySession
         if (sessionRegistry.TryGetBySessionId(req.SessionId, out var session))
         {
             session.Disconnect();
-            logger.LogInformation("Client disconnected by GameServer RPC: SessionId={SessionId}", req.SessionId);
+            logger.LogDebug("Client disconnected by GameServer RPC: SessionId={SessionId}", req.SessionId);
             return Task.FromResult(new ServiceMeshDisconnectClientRes { Success = true });
         }
 
@@ -32,7 +32,7 @@ public class ControlController(ILogger<ControlController> logger, GatewaySession
         if (sessionRegistry.TryGetBySessionId(req.SessionId, out var rerouteSession))
         {
             rerouteSession.Reroute(req.TargetNodeId);
-            logger.LogInformation("Session rerouted via RPC: SessionId={SessionId}, NewNodeId={NodeId}",
+            logger.LogDebug("Session rerouted via RPC: SessionId={SessionId}, NewNodeId={NodeId}",
                 req.SessionId, req.TargetNodeId);
             return Task.FromResult(new ServiceMeshRerouteSocketRes { Success = true });
         }
@@ -46,9 +46,17 @@ public class ControlController(ILogger<ControlController> logger, GatewaySession
     {
         if (sessionRegistry.TryGetBySessionId(req.SessionId, out var session))
         {
-            session.DeriveAndActivateEncryption(req.ClientEphemeralPublicKey.ToByteArray());
-            logger.LogInformation("Encryption activated via RPC: SessionId={SessionId}", req.SessionId);
-            return Task.FromResult(new ServiceMeshActivateEncryptionRes { Success = true });
+            try
+            {
+                session.DeriveAndActivateEncryption(req.ClientEphemeralPublicKey.ToByteArray());
+                logger.LogDebug("Encryption activated via RPC: SessionId={SessionId}", req.SessionId);
+                return Task.FromResult(new ServiceMeshActivateEncryptionRes { Success = true });
+            }
+            catch (ObjectDisposedException)
+            {
+                logger.LogWarning("Session already disposed during encryption activation: SessionId={SessionId}", req.SessionId);
+                return Task.FromResult(new ServiceMeshActivateEncryptionRes { Success = false });
+            }
         }
 
         logger.LogWarning("Cannot activate encryption via RPC: SessionId={SessionId} not found", req.SessionId);

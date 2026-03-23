@@ -24,6 +24,7 @@ public class GatewayTcpServer : TcpServer
     private readonly UniqueIdGenerator _idGenerator;
     private readonly long _gatewayNodeId;
     private readonly bool _encryptionEnabled;
+    private readonly int _maxPacketsPerSecond;
     private readonly ECDsa? _signingKey;
 
     public GatewayTcpServer(
@@ -40,7 +41,11 @@ public class GatewayTcpServer : TcpServer
         _idGenerator = idGenerator;
         _gatewayNodeId = options.Value.GatewayNodeId;
         _encryptionEnabled = options.Value.EnableEncryption;
+        _maxPacketsPerSecond = options.Value.MaxPacketsPerSecond;
         _signingKey = _encryptionEnabled ? LoadSigningKey(options.Value.SigningKeyPath) : null;
+
+        // Nagle 알고리즘 비활성화 — 작은 패킷의 ~25-40ms 지연 방지
+        OptionNoDelay = true;
 
         if (!_encryptionEnabled)
             _logger.LogWarning("Encryption is DISABLED. All packets will be transmitted in plaintext (development mode)");
@@ -138,7 +143,7 @@ public class GatewayTcpServer : TcpServer
 
     protected override TcpSession CreateSession()
     {
-        return new GatewaySession(this, _logger, _packetRouter, _nodeSender, _gatewayNodeId, _idGenerator, CreateSessionCrypto());
+        return new GatewaySession(this, _logger, _packetRouter, _nodeSender, _gatewayNodeId, _idGenerator, _maxPacketsPerSecond, CreateSessionCrypto());
     }
 
     protected override void OnError(SocketError error)

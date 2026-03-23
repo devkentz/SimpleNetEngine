@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using SimpleNetEngine.Game.Core;
 using SimpleNetEngine.Protocol.Packets;
 
@@ -27,7 +28,7 @@ public interface IMessageDispatcher
 /// Opcode(MsgId) 기반으로 등록된 핸들러에 메시지 라우팅
 /// RequireActorState 어트리뷰트 기반 Actor 상태 접근 제어 포함
 /// </summary>
-public class MessageDispatcher : IMessageDispatcher
+public class MessageDispatcher(ILogger<MessageDispatcher> logger) : IMessageDispatcher
 {
     private readonly Dictionary<int, Func<IServiceProvider, ISessionActor, ReadOnlyMemory<byte>, Task<Response?>>> _handlers = [];
 
@@ -59,15 +60,19 @@ public class MessageDispatcher : IMessageDispatcher
         IActorMessage message)
     {
         // Payload에서 opcode 추출 시도
-        var opcode = ExtractOpcode(message.Payload);
         
-        if (opcode.HasValue && _handlers.TryGetValue(opcode.Value, out var handler))
+        var opcode = ExtractOpcode(message.Payload);
+        if (opcode < 0)
+            return null;
+
+        if (_handlers.TryGetValue(opcode, out var handler))
         {
             // ★ RequireActorState 상태 검사 (아키텍처 스펙: 상태 기반 패킷 접근 제어)
-            if (_stateCache.TryGetValue(opcode.Value, out var allowedStates) && allowedStates.Length > 0)
+            if (_stateCache.TryGetValue(opcode, out var allowedStates) && allowedStates.Length > 0)
             {
                 if (!Array.Exists(allowedStates, s => s == actor.Status))
                 {
+                    Log.ActorStateRejected(logger, actor.ActorId, opcode, actor.Status);
                     return Response.Error((short)ErrorCode.GameActorInvalidState);
                 }
             }
@@ -88,10 +93,10 @@ public class MessageDispatcher : IMessageDispatcher
     /// Payload에서 opcode 추출
     /// Wire format: [EndPointHeader(8)][GameHeader(MsgId(4)+SequenceId(2)+RequestId(2))][Proto]
     /// </summary>
-    private static int? ExtractOpcode(ReadOnlyMemory<byte> payload)
+    private static int ExtractOpcode(ReadOnlyMemory<byte> payload)
     {
         if (payload.Length < EndPointHeader.SizeOf + sizeof(int))
-            return null;
+            return -1;
 
         return BinaryPrimitives.ReadInt32LittleEndian(payload.Span[EndPointHeader.SizeOf..]);
     }
@@ -106,3 +111,4 @@ public interface IUserHandlerRegistrar
 {
     void RegisterHandlers(MessageDispatcher dispatcher);
 }
+

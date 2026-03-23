@@ -77,8 +77,7 @@ public class GameHandshakeHandler : IHandshakeHandler
         var clientPublicKeyDer = ecdh.PublicKey.ExportSubjectPublicKeyInfo();
 
         // 3. HandshakeReq 전송 (클라이언트 공개키 포함) → HandshakeRes 수신 (평문)
-        var response = await client.RequestAsync<HandshakeReq, HandshakeRes>(
-            new HandshakeReq
+        var response = await client.RequestAsync<HandshakeReq, HandshakeRes>(new HandshakeReq
             {
                 ClientEphemeralPublicKey = ByteString.CopyFrom(clientPublicKeyDer)
             }, cancellationToken).ConfigureAwait(false);
@@ -119,11 +118,12 @@ public class GameHandshakeHandler : IHandshakeHandler
             // 5. 암호화 즉시 활성화 (LoginGameReq 전에 필요)
             //    Gateway는 이미 ActivateEncryption RPC 완료 상태
             client.ActivateEncryption(aesKey);
-
-            return new HandshakeResult();
         }
 
-        // 암호화 미지원 서버 (ECDH 공개키 없음)
+        // 6. 서버 옵션 적용: Idle Ping 활성화 (서버가 지정한 간격)
+        if (response.PingIntervalMs > 0)
+            client.EnablePing(response.PingIntervalMs);
+
         return new HandshakeResult();
     }
 }

@@ -5,49 +5,23 @@ namespace SimpleNetEngine.Game.Middleware;
 
 /// <summary>
 /// 성능 측정 Middleware
-/// 패킷 처리 시간 측정 및 통계 (AOP - Performance Monitoring)
+/// Stopwatch 할당 없이 Stopwatch.GetTimestamp() 기반 측정
 /// </summary>
-public class PerformanceMiddleware : IPacketMiddleware
+public class PerformanceMiddleware(ILogger<PerformanceMiddleware> logger) : IPacketMiddleware
 {
-    private readonly ILogger<PerformanceMiddleware> _logger;
-    private const int SlowPacketThresholdMs = 100; // 100ms 이상이면 slow로 간주
-
-    public PerformanceMiddleware(ILogger<PerformanceMiddleware> logger)
-    {
-        _logger = logger;
-    }
+    private const long SlowPacketThresholdTicks = 100 * TimeSpan.TicksPerMillisecond;
 
     public async Task InvokeAsync(PacketContext context, Func<Task> next)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var start = Stopwatch.GetTimestamp();
 
-        try
+        await next();
+
+        var elapsed = Stopwatch.GetElapsedTime(start);
+        if (elapsed.Ticks > SlowPacketThresholdTicks)
         {
-            // 다음 Middleware 실행
-            await next();
-        }
-        finally
-        {
-            stopwatch.Stop();
-
-            var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
-
-            // Context에 실행 시간 저장
-            context.Items["ElapsedMs"] = elapsedMs;
-
-            // Slow packet 경고
-            if (elapsedMs > SlowPacketThresholdMs)
-            {
-                _logger.LogWarning("Slow packet detected: Session={SessionId}, Opcode={Opcode}, Elapsed={ElapsedMs}ms",
-                    context.SessionId, context.Opcode, elapsedMs);
-            }
-            else
-            {
-                _logger.LogTrace("Packet processed: Elapsed={ElapsedMs}ms", elapsedMs);
-            }
-
-            // TODO: 메트릭 수집 (Prometheus, StatsD 등)
-            // _metricsCollector.RecordPacketProcessingTime(context.Opcode, elapsedMs);
+            logger.LogWarning("Slow packet: Session={SessionId}, Elapsed={ElapsedMs:F1}ms",
+                context.SessionId, elapsed.TotalMilliseconds);
         }
     }
 }

@@ -1,4 +1,5 @@
 using SimpleNetEngine.Node.Config;
+using SimpleNetEngine.Protocol.Utils;
 using Internal.Protocol;
 
 namespace SimpleNetEngine.Gateway.Options;
@@ -65,6 +66,12 @@ public class GatewayOptions
     public string? SigningKeyPath { get; set; }
 
     /// <summary>
+    /// 클라이언트 초당 최대 패킷 수 (0 = 무제한)
+    /// 초과 시 연결 종료
+    /// </summary>
+    public int MaxPacketsPerSecond { get; set; } = 100;
+
+    /// <summary>
     /// Gateway Node ID (NodeGuid로부터 생성됨, 내부적으로 사용)
     /// </summary>
     internal long GatewayNodeId { get; set; }
@@ -79,7 +86,7 @@ public class GatewayOptions
             NodeGuid = NodeGuid,
             Port = ServiceMeshPort,
             ServerType = EServerType.Gateway,
-            Host = "127.0.0.1",
+            Host = NetworkHelper.GetLocalIpAddress(),
             RedisConnectionString = RedisConnectionString
         };
     }

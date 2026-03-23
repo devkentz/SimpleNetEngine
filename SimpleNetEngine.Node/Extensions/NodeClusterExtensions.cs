@@ -40,7 +40,7 @@ public static class NodeExtensions
         services.AddSingleton<IApplicationStopper, HostApplicationStopper>();
 
         services.AddSingleton<INodeManager, NodeManager>();
-        services.AddSingleton<INodeActorManager, NodeActorManager>();
+
         services.AddSingleton<NodeService>();
         services.AddSingleton<UniqueIdGenerator>(sp =>
         {
@@ -80,7 +80,7 @@ public static class NodeExtensions
         services.AddSingleton<IApplicationStopper, HostApplicationStopper>();
 
         services.AddSingleton<INodeManager, NodeManager>();
-        services.AddSingleton<INodeActorManager, NodeActorManager>();
+
         services.AddSingleton<NodeService>();
         services.AddSingleton<UniqueIdGenerator>(sp =>
         {

@@ -97,6 +97,7 @@ namespace SimpleNetEngine.Client
         private readonly TcpClientImplement _tcpClientImplement;
         private bool _disposed  = false;
         private ushort _msgSeq;
+        private volatile SocketError _lastSocketError = SocketError.Success;
 
         /// <summary>
         /// 다음 SequenceId 발급 (단조 증가, 0 건너뛰기)
@@ -109,6 +110,14 @@ namespace SimpleNetEngine.Client
 
         // --- Idle Ping (Heartbeat) ---
         private long _lastSentTicks;
+        private volatile bool _pingEnabled;
+        private TimeSpan _pingInterval;
+
+        // --- Time Sync (NTP-style) ---
+        private long _lastTimeSyncTicks;
+        private volatile bool _timeSyncEnabled;
+        private long _serverTimeOffsetMs;
+        private long _lastRttMs;
 
         // --- 암호화 상태 (Outbound C2S만, Inbound S2C는 ProtoPacketParser에서 처리) ---
         private AesGcm? _encryptAesGcm;
@@ -131,11 +140,63 @@ namespace SimpleNetEngine.Client
         public string? ReconnectKey { get; set; }
 
         /// <summary>
+        /// 현재 클라이언트 SequenceId (재접속 시 ReconnectReq.LastClientSequenceId로 전달)
+        /// </summary>
+        public ushort CurrentSequenceId => _msgSeq;
+
+        /// <summary>
+        /// 재접속 성공 후 서버가 확인한 SequenceId로 동기화
+        /// ReconnectRes.ClientNextSequenceId - 1 을 전달하면 다음 NextMsgSeq()가 올바른 값을 반환
+        /// </summary>
+        public void SyncSequenceId(ushort sequenceId)
+        {
+            _msgSeq = sequenceId;
+        }
+
+        /// <summary>
         /// 암호화 채널 활성화 여부 (ECDH 키 교환 완료 후 true)
         /// 서버가 EnableEncryption=false이면 항상 false.
         /// SendOptions.Encrypted 사용 전에 이 값을 확인할 것.
         /// </summary>
         public bool IsEncryptionActive => _encryptionActive;
+
+        /// <summary>
+        /// Idle Ping 활성화 (Handshake 완료 시 서버 옵션으로 자동 호출됨)
+        /// intervalMs == 0이면 Ping 비활성화 상태 유지.
+        /// </summary>
+        public void EnablePing(uint intervalMs = 0)
+        {
+            if (intervalMs > 0)
+                _pingInterval = TimeSpan.FromMilliseconds(intervalMs);
+
+            Volatile.Write(ref _lastSentTicks, Stopwatch.GetTimestamp());
+            _pingEnabled = true;
+        }
+
+        /// <summary>
+        /// TimeSync 활성화 (Handshake 완료 후 호출)
+        /// </summary>
+        public void EnableTimeSync()
+        {
+            Volatile.Write(ref _lastTimeSyncTicks, Stopwatch.GetTimestamp());
+            _timeSyncEnabled = true;
+        }
+
+        /// <summary>
+        /// 서버-클라이언트 시간 오프셋 (ms). 서버시간 = 로컬UTC + Offset
+        /// </summary>
+        public long ServerTimeOffsetMs => Volatile.Read(ref _serverTimeOffsetMs);
+
+        /// <summary>
+        /// 마지막 측정 RTT (ms)
+        /// </summary>
+        public long LastRttMs => Volatile.Read(ref _lastRttMs);
+
+        /// <summary>
+        /// 보정된 현재 서버 시간 (UTC, ms)
+        /// </summary>
+        public long EstimatedServerTimeMs
+            => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + Volatile.Read(ref _serverTimeOffsetMs);
 
         private long Sid { get; set; }
         public bool IsDispose { get; set; }
@@ -168,9 +229,11 @@ namespace SimpleNetEngine.Client
             _packetParser = new ProtoPacketParser();
             _rpcManager = new RpcRequestManager(requestIdGenerator ?? new SequentialRequestIdGenerator(), _config.RequestTimeout);
 
-            _tcpClientImplement = new TcpClientImplement(address, port);
-            _tcpClientImplement.OptionNoDelay = _config.NoDelay;
-            _tcpClientImplement.OptionKeepAlive = _config.KeepAlive;
+            _tcpClientImplement = new TcpClientImplement(address, port)
+            {
+                OptionNoDelay = _config.NoDelay,
+                OptionKeepAlive = _config.KeepAlive
+            };
 
             _tcpClientImplement.OnErrorHandler += OnError;
             _tcpClientImplement.OnConnectedHandler += OnConnected;
@@ -199,8 +262,9 @@ namespace SimpleNetEngine.Client
                 var handshakeTask = _handshakeHandler.PerformHandshakeAsync(this, linkedCts.Token);
 
                 // 2. TCP 연결
+                var connectTcs = _tcpConnectTcs;
                 _tcpClientImplement.ConnectAsync();
-                await _tcpConnectTcs.Task.WaitAsync(linkedCts.Token);
+                await connectTcs.Task.WaitAsync(linkedCts.Token);
 
                 // 3. Handshake 완료 대기 (인터셉터가 ReadyToHandshakeNtf 수신 후 HandshakeReq 전송)
                 var handshakeResult = await handshakeTask;
@@ -210,10 +274,7 @@ namespace SimpleNetEngine.Client
                 _logger.LogInformation("Handshake completed{Encrypted}",
                     _encryptionActive ? " (encrypted)" : "");
 
-                // 5. Idle Ping 초기화
-                Volatile.Write(ref _lastSentTicks, Stopwatch.GetTimestamp());
-
-                // 6. Handshake 완료 후 OnConnected 콜백
+                // 5. Handshake 완료 후 OnConnected 콜백 (Ping은 EnablePing() 호출 시 활성화)
                 OnConnectedHandler?.Invoke();
 
                 return true;
@@ -226,6 +287,11 @@ namespace SimpleNetEngine.Client
             catch (OperationCanceledException)
             {
                 _logger.LogWarning("Connection cancelled by user");
+                throw;
+            }
+            catch (SocketException sex)
+            {
+                _logger.LogError("Connection failed: {Error} ({Code}) [sid:{Sid}]", sex.SocketErrorCode, (int)sex.SocketErrorCode, Sid);
                 throw;
             }
             catch (Exception ex)
@@ -369,6 +435,7 @@ namespace SimpleNetEngine.Client
 
             ProcessPacket();
             CheckIdlePing();
+            CheckTimeSync();
         }
 
         private void ProcessPacket()
@@ -404,10 +471,10 @@ namespace SimpleNetEngine.Client
                 var span = buffer.AsSpan(0, totalSize);
                 int pos = 0;
 
-                System.Runtime.InteropServices.MemoryMarshal.Write(span.Slice(pos), in endPointHeader);
+                MemoryMarshal.Write(span.Slice(pos), in endPointHeader);
                 pos += EndPointHeader.SizeOf;
 
-                System.Runtime.InteropServices.MemoryMarshal.Write(span.Slice(pos), in gameHeader);
+                MemoryMarshal.Write(span.Slice(pos), in gameHeader);
                 pos += GameHeader.SizeOf;
 
                 message.WriteTo(span.Slice(pos, payloadSize));
@@ -484,11 +551,12 @@ namespace SimpleNetEngine.Client
 
         private void CheckIdlePing()
         {
-            if (_config.PingInterval <= TimeSpan.Zero)
+            var interval = _pingInterval > TimeSpan.Zero ? _pingInterval : _config.PingInterval;
+            if (!_pingEnabled || interval <= TimeSpan.Zero)
                 return;
 
             var elapsed = Stopwatch.GetElapsedTime(Volatile.Read(ref _lastSentTicks));
-            if (elapsed < _config.PingInterval)
+            if (elapsed < interval)
                 return;
 
             try
@@ -498,6 +566,27 @@ namespace SimpleNetEngine.Client
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to send idle PingReq");
+            }
+        }
+
+        private void CheckTimeSync()
+        {
+            if (!_timeSyncEnabled || _config.TimeSyncInterval <= TimeSpan.Zero)
+                return;
+
+            var elapsed = Stopwatch.GetElapsedTime(Volatile.Read(ref _lastTimeSyncTicks));
+            if (elapsed < _config.TimeSyncInterval)
+                return;
+
+            Volatile.Write(ref _lastTimeSyncTicks, Stopwatch.GetTimestamp());
+
+            try
+            {
+                Send(new TimeSyncReq { ClientSendTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to send TimeSyncReq");
             }
         }
 
@@ -513,10 +602,15 @@ namespace SimpleNetEngine.Client
 
         private void OnDisconnected()
         {
-            _logger.LogInformation("TCP client disconnected - [sid:{Sid}]", Sid);
+            _logger.LogWarning("TCP client disconnected - [sid:{Sid}], lastError={Error}", Sid, _lastSocketError);
 
             var tcs = Interlocked.Exchange(ref _tcpConnectTcs, null);
-            tcs?.SetCanceled();
+            if (tcs != null)
+            {
+                // ConnectAsync 대기 중에 disconnect 발생 — 원인 포함한 예외로 전달
+                var error = _lastSocketError;
+                tcs.TrySetException(new SocketException((int)error));
+            }
 
             _rpcManager.CancelAll();
             OnDisconnectedHandler?.Invoke();
@@ -524,6 +618,7 @@ namespace SimpleNetEngine.Client
 
         private void OnError(SocketError error)
         {
+            _lastSocketError = error;
             OnErrorHandler?.Invoke(error);
             _logger.LogWarning("Socket error: {Error} [sid:{Sid}]", error, Sid);
         }
@@ -577,6 +672,18 @@ namespace SimpleNetEngine.Client
                         );
                         _tcpClientImplement.Disconnect();
                         return;
+                    }
+
+                    // TimeSync 응답 인터셉트 (인프라 메커니즘, 앱에 노출 불필요)
+                    if (packet.GameHeader.MsgId == TimeSyncRes.MsgId && packet.Message is TimeSyncRes syncRes)
+                    {
+                        var clientRecvTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        var rtt = clientRecvTime - syncRes.ClientSendTimestamp;
+                        var timeOffset = syncRes.ServerTimestamp - (syncRes.ClientSendTimestamp + rtt / 2);
+
+                        Volatile.Write(ref _lastRttMs, rtt);
+                        Volatile.Write(ref _serverTimeOffsetMs, timeOffset);
+                        continue;
                     }
 
                     // 메시지 인터셉터 확인 (handshake 중 서버 푸시 메시지 수신용)

@@ -1,10 +1,13 @@
+using Game.Protocol;
 using Internal.Protocol;
 using Microsoft.Extensions.Logging;
 using SimpleNetEngine.Game.Actor;
+using SimpleNetEngine.Game.Core;
 using SimpleNetEngine.Game.Network;
 using SimpleNetEngine.Game.Session;
 using SimpleNetEngine.Game.Services;
 using SimpleNetEngine.Node.Core;
+using SimpleNetEngine.Protocol.Packets;
 
 namespace SimpleNetEngine.Game.Controllers;
 
@@ -29,12 +32,13 @@ public class KickoutController(
     ISessionActorManager actorManager,
     ActorDisconnectHandler disconnectHandler,
     GatewayDisconnectQueue disconnectQueue,
+    IClientSender clientSender,
     ILoginHandler loginHandler)
 {
     [NodePacketHandler(ServiceMeshKickoutReq.MsgId)]
     public async Task<ServiceMeshKickoutRes> HandleKickout(ServiceMeshKickoutReq req)
     {
-        logger.LogInformation(
+        logger.LogDebug(
             "Kickout request received: UserId={UserId}, SessionId={SessionId}",
             req.UserId, req.SessionId);
 
@@ -57,10 +61,13 @@ public class KickoutController(
         var actor = actorResult.Value;
         var sessionId = req.SessionId;
 
-        // 2. 앱 Hook + DisconnectAction 분기를 단일 mailbox 턴에서 처리
+        // 2. 클라이언트에 KickoutNtf 전송 (Actor 제거/Disconnect 전)
+        clientSender.SendNtf(actor, Response.Ntf(new KickoutNtf { Reason = EKickoutReason.DuplicateLogin }));
+
+        // 3. 앱 Hook + DisconnectAction 분기를 단일 mailbox 턴에서 처리
         await actor.ExecuteAsync(async _ =>
         {
-            var action = await loginHandler.OnKickoutAsync(actor, KickoutReason.DuplicateLogin);
+            var action = await loginHandler.OnKickoutAsync(actor, EKickoutReason.DuplicateLogin);
 
             if (action == DisconnectAction.AllowSessionResume)
             {
@@ -75,7 +82,7 @@ public class KickoutController(
         // 4. Gateway 소켓 해제를 대기열에 예약
         disconnectQueue.Schedule(sessionId, req.GatewayNodeId);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "Kickout completed: UserId={UserId}, SessionId={SessionId}",
             req.UserId, sessionId);
 

@@ -13,9 +13,14 @@ class Program
         // UTF-8 콘솔 인코딩 설정 (한글 깨짐 방지)
         Console.OutputEncoding = System.Text.Encoding.UTF8;
 
+        // ThreadPool 최소 쓰레드 사전 할당 (Actor 스케줄링 + Redis 콜백 지연 방지)
+        // Aspire 환경에서 초기화 순서 보장을 위해 Main 진입점 최상단에 배치
+        ThreadPool.SetMinThreads(Environment.ProcessorCount * 64, 1000);
+
         try
         {
             var host = Host.CreateDefaultBuilder(args)
+                .ConfigureLogging(logging => logging.ClearProviders())
                 .UseSerilog((context, configuration) =>
                 {
                     configuration.ReadFrom.Configuration(context.Configuration);
@@ -27,7 +32,7 @@ class Program
                         ?? throw new InvalidOperationException("GameServer config not found");
 
                     // OpenTelemetry (Tracing + Metrics + Logging)
-                    services.AddNetworkEngineTelemetry();
+                    services.AddNetworkEngineTelemetry(context.Configuration);
 
                     // GameServer 통합 등록 (빌더 패턴)
                     services.AddGameServer(game =>

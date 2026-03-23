@@ -26,7 +26,7 @@ public class SessionActorExecuteAsyncTests
             gatewayNodeId: 200,
             scopeFactory: scopeFactory,
             dispatcher: Mock.Of<IMessageDispatcher>(),
-            pipeline: new MiddlewarePipelineFactory(Mock.Of<ILogger<MiddlewarePipeline>>()).CreateDefaultPipeline(),
+            pipeline: new MiddlewarePipelineFactory(Enumerable.Empty<IPacketMiddleware>()).CreateDefaultPipeline(),
             logger: Mock.Of<ILogger>());
     }
 

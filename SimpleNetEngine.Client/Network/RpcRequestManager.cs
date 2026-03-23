@@ -50,8 +50,7 @@ public class RpcRequestManager : IDisposable
             sendAction(requestId);
 
             return await tcs.Task
-                .WaitAsync(linkedCts.Token)
-                ;
+                .WaitAsync(linkedCts.Token);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {

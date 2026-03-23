@@ -6,6 +6,7 @@ using SimpleNetEngine.Game.Actor;
 using SimpleNetEngine.Game.Core;
 using SimpleNetEngine.Game.Options;
 using SimpleNetEngine.Game.Session;
+using SimpleNetEngine.Node.Cluster;
 using SimpleNetEngine.Node.Network;
 using SimpleNetEngine.Protocol.Packets;
 
@@ -28,6 +29,7 @@ public class ReconnectController(
     ActorDisposeQueue disposeQueue,
     INodeSender nodeSender,
     ILoginHandler loginHandler,
+    IClusterRegistry clusterRegistry,
     IOptions<GameOptions> options,
     TimeProvider timeProvider)
 {
@@ -73,24 +75,44 @@ public class ReconnectController(
             });
         }
 
-        logger.LogInformation(
+        logger.LogDebug(
             "ReconnectReq: UserId={UserId}, SessionNode={SessionNode}, CurrentNode={CurrentNode}",
             userId.Value, session.GameServerNodeId, _options.GameNodeId);
 
         // 3. Same-Node vs Cross-Node 분기
         if (session.GameServerNodeId == _options.GameNodeId)
         {
-            return await HandleSameNodeReconnect(tempActor, userId.Value, session, reconnectKey);
+            return await HandleSameNodeReconnect(tempActor, userId.Value, session, reconnectKey, req);
         }
 
-        return await HandleCrossNodeReconnect(tempActor, session);
+        // Cross-Node: 기존 GameServer가 살아있는지 확인
+        var liveNodes = await clusterRegistry.GetLiveNodeIdsAsync();
+        if (!liveNodes.Contains(session.GameServerNodeId))
+        {
+            // 기존 GameServer가 다운 → stale session 정리 + 재로그인 유도
+            logger.LogWarning(
+                "Reconnect target GameServer-{NodeId} is dead. Cleaning up stale session for UserId={UserId}",
+                session.GameServerNodeId, userId.Value);
+
+            await sessionStore.DeleteReconnectKeyAsync(reconnectKey);
+            await sessionStore.DeleteSessionIfMatchAsync(userId.Value, session.SessionId);
+
+            return Response.Ok(new ReconnectRes
+            {
+                Success = false,
+                RequiresRelogin = true,
+                ErrorMessage = "Session server unavailable"
+            });
+        }
+
+        return await HandleCrossNodeReconnect(tempActor, userId.Value, reconnectKey, session);
     }
 
     /// <summary>
     /// Same-Node 재접속: 로컬 Disconnected Actor 복원
     /// </summary>
     private async Task<Response> HandleSameNodeReconnect(
-        ISessionActor tempActor, long userId, SessionInfo session, Guid oldReconnectKey)
+        ISessionActor tempActor, long userId, SessionInfo session, Guid oldReconnectKey, ReconnectReq req)
     {
         // 기존 Actor 조회 (Disconnected 상태여야 함)
         var existingResult = actorManager.GetActor(session.SessionId);
@@ -122,8 +144,12 @@ public class ReconnectController(
         // Disconnected 타임스탬프 초기화
         existingActor.ClearDisconnected();
 
-        // 라우팅 정보 갱신 (새 Gateway/TCP 연결)
-        existingActor.UpdateRouting(tempActor.GatewayNodeId);
+        // gap 정보 수집 (UpdateRouting이 _lastClientSequenceId를 덮어쓰기 전에 저장)
+        var serverLastValidatedClientSeqId = existingActor.LastClientSequenceId;
+        var serverCurrentSeqId = (ushort)existingActor.SequenceId;
+
+        // 라우팅 정보 갱신 (새 Gateway/TCP 연결) + 클라이언트 SequenceId 연속성 유지
+        existingActor.UpdateRouting(tempActor.GatewayNodeId, (ushort)req.LastClientSequenceId);
 
         // old ReconnectKey 삭제 + 새 키 발급
         await sessionStore.DeleteReconnectKeyAsync(oldReconnectKey);
@@ -142,8 +168,13 @@ public class ReconnectController(
         // Active 상태 복원
         existingActor.Status = ActorState.Active;
 
-        // 앱 Hook: 재접속 성공
-        await loginHandler.OnReconnectedAsync(existingActor);
+        // 앱 Hook: 재접속 성공 (gap 정보 전달 — 앱이 유실 패킷 대응)
+        var gapInfo = new ReconnectGapInfo(
+            ClientReportedLastServerSeqId: (ushort)req.LastServerSequenceId,
+            ServerCurrentSeqId: serverCurrentSeqId,
+            ClientReportedLastClientSeqId: (ushort)req.LastClientSequenceId,
+            ServerLastValidatedClientSeqId: serverLastValidatedClientSeqId);
+        await loginHandler.OnReconnectedAsync(existingActor, gapInfo);
 
         // Actor SessionId 스왑: 기존 Actor의 SessionId를 tempActor(Gateway가 알고 있는)의 것으로 교체
         // Gateway RPC 불필요 — Gateway는 이미 tempActor.ActorId로 패킷을 보내고 있음
@@ -161,15 +192,17 @@ public class ReconnectController(
                 userId, session.SessionId, tempSessionId, rekeyResult.ErrorMessage);
         }
 
-        logger.LogInformation(
+        logger.LogDebug(
             "Same-node reconnect completed: UserId={UserId}, SessionId={SessionId}, OldTempSessionId={TempSessionId}",
             userId, session.SessionId, tempActor.ActorId);
 
         return Response.Ok(new ReconnectRes
         {
             Success = true,
-            NewReconnectKey = newKey.ToString()
-        });
+            NewReconnectKey = newKey.ToString(),
+            ServerSequenceId = (uint)serverCurrentSeqId,
+            ClientNextSequenceId = (uint)(ushort)(req.LastClientSequenceId + 1)
+        }).UseEncrypt();
     }
 
     /// <summary>
@@ -188,9 +221,9 @@ public class ReconnectController(
     /// ReconnectKey는 삭제하지 않음 — A가 처리할 때 사용해야 함.
     /// </summary>
     private async Task<Response> HandleCrossNodeReconnect(
-        ISessionActor tempActor, SessionInfo session)
+        ISessionActor tempActor, long userId, Guid reconnectKey, SessionInfo session)
     {
-        logger.LogInformation(
+        logger.LogDebug(
             "Cross-node reconnect: re-routing to owning node. TempActorId={TempActorId}, OwnerNode={OwnerNode}",
             tempActor.ActorId, session.GameServerNodeId);
 
@@ -223,14 +256,19 @@ public class ReconnectController(
         }
         catch (Exception ex)
         {
+            // RPC 실패 → 기존 GameServer가 다운되었을 가능성 → stale session 정리
             logger.LogError(ex,
-                "NtfNewUser RPC failed for cross-node reconnect: TempActorId={TempActorId}, TargetNode={TargetNode}",
+                "NtfNewUser RPC failed for cross-node reconnect: TempActorId={TempActorId}, TargetNode={TargetNode}. Cleaning up stale session.",
                 tempActor.ActorId, session.GameServerNodeId);
-            
+
+            await sessionStore.DeleteReconnectKeyAsync(reconnectKey);
+            await sessionStore.DeleteSessionIfMatchAsync(userId, session.SessionId);
+
             return Response.Ok(new ReconnectRes
             {
                 Success = false,
-                ErrorMessage = "Cross-node RPC failed"
+                RequiresRelogin = true,
+                ErrorMessage = "Session server unavailable"
             });
         }
 

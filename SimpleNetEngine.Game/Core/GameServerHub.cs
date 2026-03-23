@@ -33,9 +33,7 @@ public class GameServerHub(
         var actorResult = actorManager.GetActor(context.SessionId);
         if (actorResult.IsFailure)
         {
-            logger.LogWarning(
-                "Actor not found: SessionId={SessionId}. Sending SESSION_EXPIRED.",
-                context.SessionId);
+            Log.ActorNotFound(logger, context.SessionId);
 
             context.SendResponse?.Invoke(
                 context.GatewayNodeId, context.SessionId,
@@ -48,4 +46,5 @@ public class GameServerHub(
 
         actorResult.Value.Push(new PacketActorMessage(context));
     }
+
 }

@@ -68,7 +68,7 @@ public class NodeManager : INodeManager
 
     public bool TryAdd(long remoteId, RemoteNode node)
     {
-        if (false == _nodesById.TryAdd(remoteId, node))
+        if (!_nodesById.TryAdd(remoteId, node))
             return false;
         
         Debug.Assert(node.ServerTypeString != "Unknown");

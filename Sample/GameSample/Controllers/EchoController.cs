@@ -16,7 +16,7 @@ public class EchoController(ILogger<EchoController> logger, INodeSender nodeSend
     [UserPacketHandler(EchoReq.MsgId)]
     public Task<Response> EchoHandler(ISessionActor actor, EchoReq req)
     {
-        logger.LogInformation(
+        logger.LogDebug(
             "Echo request: ActorId={ActorId}, UserId={UserId}, Message={Message}",
             actor.ActorId, actor.UserId, req.Message);
 
@@ -40,6 +40,6 @@ public class EchoController(ILogger<EchoController> logger, INodeSender nodeSend
         {
             Message = $"NodeId:{res.NodeId} Echo: {res.Message}",
             Timestamp = (int)res.Timestamp
-        });
+        }).UseEncrypt().UseCompress();
     }
 }

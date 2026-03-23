@@ -24,7 +24,7 @@ public class NodeDispatcher(ILogger<NodeDispatcher> logger) : INodeDispatcher
     {
         if (!_handlers.TryGetValue(packet.Header.MsgId, out var handler))
         {
-            logger.LogWarning("NodeDispatcher: No handler for MsgId={MsgId}", packet.Header.MsgId);
+            Log.NoHandlerForMsgId(logger, packet.Header.MsgId);
             return null;
         }
 

@@ -1,0 +1,30 @@
+services:
+  dframe-controller:
+    build:
+      context: ..
+      dockerfile: Sample/StressTest.Controller/Dockerfile
+    ports:
+      - "7312:7312"   # Web UI + REST API
+      - "7313:7313"   # Worker connect
+    volumes:
+      - dframe-results:/app/results
+    environment:
+      - DFRAME_CONTROLLER_PORT=7312
+      - DFRAME_WORKER_PORT=7313
+
+  dframe-worker:
+    build:
+      context: ..
+      dockerfile: Sample/StressTest.Worker/Dockerfile
+    deploy:
+      replicas: 3     # Worker 수 조절
+    depends_on:
+      - dframe-controller
+    environment:
+      - DFRAME_CONTROLLER_ADDRESS=http://dframe-controller:7313
+      - REDIS_CONNECTION=${REDIS_CONNECTION:-redis:6379}
+      - GATEWAY_HOST=${GATEWAY_HOST:-gateway}
+      - GATEWAY_PORT=${GATEWAY_PORT:-5000}
+
+volumes:
+  dframe-results:
