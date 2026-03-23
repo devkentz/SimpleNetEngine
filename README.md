@@ -27,7 +27,6 @@ Client ──TCP──► Gateway (Dumb Proxy) ──NetMQ P2P──► GameServ
 | 직렬화 | Protocol Buffers |
 | 세션 관리 | Redis (SSOT) |
 | 로깅 | Serilog + OpenTelemetry |
-| 오케스트레이션 | .NET Aspire |
 | 스트레스 테스트 | DFrame |
 
 ## 주요 기능
@@ -70,13 +69,6 @@ public class LoginController(ISessionManager sessions)
 - 신규 서버 추가 시 자동 감지 및 연결, 장애 서버 자동 제거
 - Gateway/GameServer/Stateless Service 모두 수평 확장 가능
 
-### 동시성 모델
-
-| 모델 | 용도 |
-|------|------|
-| Sequential | 전역 큐 순차 처리 (GameServer, Gateway) |
-| Parallel | ActorId별 병렬 큐 (Stateless Service) |
-| Actor | Actor 메일박스 기반 (대규모 동시 엔티티) |
 
 상세: [docs/NODE_CONCURRENCY_MODELS.md](docs/NODE_CONCURRENCY_MODELS.md)
 
@@ -99,8 +91,6 @@ SimpleNetEngine.Game           (Tier 3)  GameServer 라이브러리
 Sample/                                  실행 가능한 샘플 서버
 ```
 
-하위 Tier → 상위 Tier 참조 불가 (단방향 의존성).
-
 ## 벤치마크
 
 ### Echo 스트레스 테스트
@@ -114,7 +104,6 @@ DFrame 기반, Worker 3대, Concurrency 600, Total Request 3,000,000
 | 3 | 1,000,000 | 0 | 32.27 | 19.02 | 40.70 | 55.52 | 18,538 |
 | **합계** | **3,000,000** | **0** | - | - | - | - | **57,949** |
 
-![Benchmark Result](docs/images/benchmark-echo-flood.png)
 
 ## 빌드 및 실행
 

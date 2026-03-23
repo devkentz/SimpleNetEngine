@@ -192,21 +192,3 @@ services.AddGeneratedNodeControllers(); // Source Generator가 생성한 코드 
 
 **원칙**: `NodeCommunicator.OnProcessPacket` 이벤트는 **NodePacketRouter만** 구독해야 함. 애플리케이션 계층에서 직접 구독 금지.
 
----
-
-## 6. 결론
-
-- **INodeDispatcher + [NodeController] Attribute**가 유일한 패킷 처리 패턴
-- 동시성 모델은 `NodeEventHandler` 서브클래스(Sequential/Parallel)로 선택
-- **NodePacketRouter → NodeEventHandler → INodeDispatcher** 계층이 표준 아키텍처
-- Legacy 패턴 (NodeMessageHandler, ActorMessage, ActorMessageFactory)은 완전히 제거됨
-
----
-
-## 변경 이력
-
-| 날짜 | 작업 | 작성자 |
-|------|------|--------|
-| 2026-03-06 | 초안 작성, 중복 처리 버그 수정 | Claude Code |
-| 2026-03-12 | 리팩터링 반영: Legacy 패턴 제거, 클래스 계층 구조 업데이트 | Claude Code |
-| 2026-03-23 | ActorNodeEventHandler 제거, ParallelNodeEventHandler 설명 수정, SequentialNodeEventHandler SingleThreadEventLoop 반영 | Claude Code |
