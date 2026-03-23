@@ -7,7 +7,7 @@
 ASP.NET의 Controller/Attribute 패턴에서 영감을 받아, TCP 패킷 핸들러를 `[NodeController]`와 `[NodePacketHandler]` 어트리뷰트로 선언적으로 작성할 수 있게 만든 개인 프로젝트입니다. 복잡한 TCP 서버 코드를 웹 개발하듯 작성하는 게 목표였습니다.
 
 - **기술 스택**: .NET 9, C# 13, NetMQ(ZeroMQ), NetCoreServer, Redis, Protobuf, Serilog, OpenTelemetry, .NET Aspire(개발용)
-- **GitHub**: [링크]
+- **GitHub**: [SimpleNetEngine](https://github.com/devkentz/SimpleNetEngine)
 
 ---
 
@@ -28,7 +28,7 @@ ASP.NET의 Controller/Attribute 패턴에서 영감을 받아, TCP 패킷 핸들
 │  Game Session Channel (Data Plane)          │
 │  Client ↔ Gateway ↔ GameServer              │
 │  - NetMQ Router-Router (1:N P2P)            │
-│  - Session 기반 라우팅, 초저지연             │
+│  - Session 기반 라우팅                       │
 └─────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────┐

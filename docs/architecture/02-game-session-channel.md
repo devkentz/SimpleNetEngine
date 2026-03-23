@@ -183,159 +183,97 @@ public class GatewaySession : TcpSession
 
 ---
 
-### 2. Gateway ↔ GameServer (P2P Full Mesh)
+### 2. Gateway ↔ GameServer (Dual-Socket P2P)
 
-#### GamePacketRouter
-**위치**: `GatewayServer/Network/GamePacketRouter.cs`
+Game Session Channel은 **Dual-Socket 패턴**을 사용하여 송신과 수신 경로를 물리적으로 분리합니다.
+
+```
+Gateway                                    GameServer
+┌──────────────────┐                  ┌──────────────────┐
+│  Send Router ────│──── Connect ────►│── Recv Router    │  Port N
+│  (Poller thread) │                  │   (NetMQPoller)  │
+│                  │                  │                  │
+│  Recv Router ◄───│──── Connect ────│── Send Router    │  Port N+1
+│  (Poller thread) │                  │   (전용 Thread   │
+│                  │                  │    + Channel<T>) │
+└──────────────────┘                  └──────────────────┘
+```
+
+**Dual-Socket을 사용하는 이유**: 하나의 RouterSocket에서 송수신을 모두 처리하면, 송신이 블로킹될 때 수신도 함께 멈추는 문제가 발생합니다. 송수신 소켓을 분리하면 이 경합을 완전히 제거할 수 있습니다.
+
+#### GamePacketRouter (Gateway 측)
+**위치**: `SimpleNetEngine.Gateway/Network/GamePacketRouter.cs`
 
 **역할**:
-- NetMQ RouterSocket으로 모든 GameServer와 양방향 통신
-- P2P Discovery를 통한 동적 연결
-- 비동기 큐를 통한 송신 처리
+- 모든 GameServer와 Dual-Socket P2P 연결 관리
+- Send Router: Gateway → GameServer 패킷 송신
+- Recv Router: GameServer → Gateway 응답 수신
 
 **핵심 코드**:
 ```csharp
 public class GamePacketRouter : IDisposable
 {
-    private RouterSocket? _router;
+    private RouterSocket? _sendRouter;   // Gateway → GameServer 송신
+    private RouterSocket? _recvRouter;   // GameServer → Gateway 수신
     private NetMQPoller? _poller;
-    private NetMQQueue<P2PMessageEnvelope>? _sendQueue;
+    private NetMQQueue<MeshMessageEnvelope>? _sendQueue;
 
-    public async Task StartAsync()
+    // GameServer 노드가 클러스터에 합류하면 Dual-Socket 연결
+    public void ConnectToGameServer(long nodeId, string recvEndpoint, string sendEndpoint)
     {
-        _router = new RouterSocket();
-        _router.Options.Identity = Encoding.UTF8.GetBytes($"Gateway-{_config.GatewayNodeId}");
-        _router.Bind($"tcp://*:{_config.P2PBindPort}");
-
-        _sendQueue = new NetMQQueue<P2PMessageEnvelope>();
-        _sendQueue.ReceiveReady += OnSendReady;
-        _router.ReceiveReady += OnReceiveReady;
-
-        _poller = new NetMQPoller { _router, _sendQueue };
-        _poller.RunAsync();
+        _sendRouter!.Connect(recvEndpoint);  // GS의 Recv Port에 연결
+        _recvRouter!.Connect(sendEndpoint);  // GS의 Send Port에 연결
     }
 
-    public void ForwardToGameServer(Guid socketId, ReadOnlySpan<byte> clientData,
+    public void ForwardToGameServer(long socketId, ReadOnlySpan<byte> clientData,
                                      long pinnedNodeId, long sessionId)
     {
-        // 1. Target NodeId 결정
-        long targetNodeId = pinnedNodeId > 0 ? pinnedNodeId
-                          : _gameServerNodeIdCache[RoundRobinIndex()];
-
-        // 2. NetMQ Msg 할당 (Unmanaged 메모리, GC 0)
+        // GSCHeader 직렬화 + clientData를 Msg에 Zero-Copy 기록
         var msg = new Msg();
-        msg.InitPool(P2PProtocol.HeaderSize + clientData.Length);
-
-        var span = msg.Slice();
-
-        // 3. P2P Header 직렬화
-        var header = new P2PProtocol.P2PHeader {
-            Type = P2PProtocol.MessageType.ClientPacket,
-            GatewayNodeId = _config.GatewayNodeId,
-            SocketId = socketId,
-            SessionId = sessionId
-        };
-        header.SerializeTo(span);
-        clientData.CopyTo(span.Slice(P2PProtocol.HeaderSize));
-
-        // 4. 비동기 큐에 삽입 (워커 쓰레드에서 실행)
-        var envelope = new P2PMessageEnvelope(targetNodeId, ref msg);
-        _sendQueue.Enqueue(envelope);
+        msg.InitPool(GSCHeader.SizeOf + clientData.Length);
+        // ... 헤더 직렬화 + payload 복사
+        var envelope = new MeshMessageEnvelope(pinnedNodeId, ref msg);
+        _sendQueue!.Enqueue(envelope);
     }
+}
+```
 
-    private void OnSendReady(object? sender, NetMQQueueEventArgs<P2PMessageEnvelope> e)
-    {
-        // Poller 쓰레드에서 실행
-        while (e.Queue.TryDequeue(out var envelope, TimeSpan.Zero))
+---
+
+#### GameSessionChannelListener (GameServer 측)
+**위치**: `SimpleNetEngine.Game/Network/GameSessionChannelListener.cs`
+
+**역할**:
+- Recv RouterSocket (Port N): Gateway → GameServer 수신 전용 (NetMQPoller 이벤트 기반)
+- Send RouterSocket (Port N+1): GameServer → Gateway 송신 전용 (전용 Thread + Channel<T>)
+
+**핵심 코드**:
+```csharp
+public class GameSessionChannelListener : IDisposable
+{
+    private RouterSocket? _recvRouter;   // Port N: 수신 전용
+    private RouterSocket? _sendRouter;   // Port N+1: 송신 전용
+    private NetMQPoller? _recvPoller;    // Recv: 이벤트 기반 수신
+    private Thread? _sendThread;         // Send: 전용 스레드
+
+    // Channel<T>: Actor 스레드 → Send 스레드 간 lock-free 큐잉
+    private readonly Channel<MeshMessageEnvelope> _sendChannel =
+        Channel.CreateUnbounded<MeshMessageEnvelope>(new UnboundedChannelOptions
         {
-            using (envelope)
-            {
-                var identityBytes = _gameServerIdentities[envelope.TargetNodeId];
-                using var identityMsg = new MsgDisposable(identityBytes);
+            SingleReader = true,    // Send IO 스레드만 읽기
+            SingleWriter = false,   // 여러 Actor 스레드에서 쓰기
+        });
 
-                _router!.Send(ref identityMsg.GetRef(), true);  // Identity frame
-                _router!.Send(ref envelope.Payload, false);     // Payload frame
-            }
-        }
-    }
+    public int BoundRecvPort { get; private set; }  // Port N
+    public int BoundSendPort { get; private set; }  // Port N+1
 }
 ```
 
 **특징**:
-- **NetMQ Poller**: 비동기 이벤트 루프
-- **Zero-allocation**: NetMQ 메모리 풀 사용
-- **비동기 큐**: 워커 쓰레드와 Poller 쓰레드 분리
+- **Dual-Socket**: 송수신 경로 물리적 분리로 경합 제거
+- **Channel<T>**: lock-free 큐잉 (Lock Contention 감소)
+- **Zero-Copy**: NetMQ `Msg.Move()` 소유권 이전
 - **Router-Router 패턴**: Identity 기반 라우팅
-
----
-
-#### GatewayPacketListener
-**위치**: `GameServer/Network/GatewayPacketListener.cs`
-
-**역할**:
-- Gateway로부터 클라이언트 패킷 수신
-- GameServer에서 처리 후 응답 전송
-- NetMQ RouterSocket 사용
-
-**핵심 코드**:
-```csharp
-public class GatewayPacketListener : IDisposable
-{
-    private RouterSocket? _router;
-    private NetMQPoller? _poller;
-
-    public async Task StartAsync()
-    {
-        _router = new RouterSocket();
-        _router.Options.Identity = Encoding.UTF8.GetBytes($"GameServer-{_config.NodeId}");
-        _router.Bind($"tcp://*:{_config.P2PBindPort}");
-
-        _router.ReceiveReady += OnReceiveReady;
-
-        _poller = new NetMQPoller { _router };
-        _poller.RunAsync();
-    }
-
-    private void OnReceiveReady(object? sender, NetMQSocketEventArgs e)
-    {
-        // [Identity][P2PHeader][Payload] 수신
-        var identity = e.Socket.ReceiveFrameBytes();  // Gateway Identity
-        var headerBytes = e.Socket.ReceiveFrameBytes();
-        var payload = e.Socket.ReceiveFrameBytes();
-
-        var header = P2PProtocol.P2PHeader.Deserialize(headerBytes);
-
-        if (header.Type == P2PProtocol.MessageType.ClientPacket)
-        {
-            // ClientPacketContext로 Actor에 전달
-            var context = new ClientPacketContext {
-                SocketId = header.SocketId,
-                SessionId = header.SessionId,
-                GatewayNodeId = header.GatewayNodeId,
-                Payload = payload
-            };
-
-            await _actorDispatcher.DispatchAsync(context);
-        }
-    }
-
-    public async Task SendToClientAsync(Guid socketId, long gatewayNodeId, byte[] responseData)
-    {
-        var identityBytes = Encoding.UTF8.GetBytes($"Gateway-{gatewayNodeId}");
-
-        var header = new P2PProtocol.P2PHeader {
-            Type = P2PProtocol.MessageType.ServerPacket,
-            SocketId = socketId
-        };
-
-        var headerBytes = header.Serialize();
-
-        _router!.SendMoreFrame(identityBytes);  // Gateway Identity
-        _router!.SendMoreFrame(headerBytes);     // P2P Header
-        _router!.SendFrame(responseData);        // Response payload
-    }
-}
-```
 
 ---
 
