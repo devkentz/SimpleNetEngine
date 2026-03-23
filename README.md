@@ -15,7 +15,7 @@ Client ──TCP──► Gateway (Dumb Proxy) ──NetMQ P2P──► GameServ
 - **Game Session Channel (Data Plane)**: Client ↔ Gateway ↔ GameServer — 유저 패킷 전용
 - **Node Service Mesh (Control Plane)**: 서버 간 RPC 통신 — Full Mesh 토폴로지
 
-상세: [docs/architecture/01-overview.md](docs/architecture/01-overview.md)
+상세: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## 기술 스택
 
@@ -114,7 +114,6 @@ DFrame 기반, Worker 3대, Concurrency 600, Total Request 3,000,000
 | 3 | 1,000,000 | 0 | 32.27 | 19.02 | 40.70 | 55.52 | 18,538 |
 | **합계** | **3,000,000** | **0** | - | - | - | - | **57,949** |
 
-![Benchmark Result](docs/images/benchmark-echo-flood.png)
 
 ## 빌드 및 실행
 
@@ -130,10 +129,7 @@ dotnet run --project Sample/Sample.AppHost
 
 | 문서 | 설명 |
 |------|------|
-| [아키텍처 개요](docs/architecture/01-overview.md) | 전체 시스템 구조 |
-| [Game Session Channel](docs/architecture/02-game-session-channel.md) | Data Plane 상세 |
-| [Node Service Mesh](docs/architecture/03-node-service-mesh.md) | Control Plane 상세 |
-| [패킷 구조](docs/architecture/07-packet-structure.md) | 패킷 헤더/바디 명세 |
+| [아키텍처 개요](docs/ARCHITECTURE.md) | 전체 시스템 구조 |
 | [암호화/압축](docs/ENCRYPTION_COMPRESSION_DESIGN.md) | 선택적 암호화 설계 |
 | [동시성 모델](docs/NODE_CONCURRENCY_MODELS.md) | Sequential/Parallel/Actor |
 | [NetMQ 최적화](docs/NETMQ_OPTIMIZATION.md) | Zero-Copy, 성능 튜닝 |
