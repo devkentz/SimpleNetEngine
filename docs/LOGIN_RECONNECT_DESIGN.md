@@ -1,15 +1,15 @@
 # 로그인 / 중복 로그인 / 재접속 설계 명세서
 
-## 개요
+## 📌 개요
 
 라이브러리(SimpleNetEngine.Game)와 앱(GameSample) 사이의 명확한 경계 분리를 기반으로,
 로그인, 중복 로그인, Heartbeat, Disconnect/Reconnect 전체 플로우를 정의한다.
 
-라이브러리가 인증 플로우의 골격(Skeleton)을 소유하고, 앱이 Hook으로 비즈니스 로직을 주입한다.
+**핵심 원칙**: 라이브러리가 인증 플로우의 **골격(Skeleton)**을 소유하고, 앱이 **Hook으로 비즈니스 로직을 주입**한다.
 
 ---
 
-## 라이브러리 vs 앱 경계
+## 🏗️ 라이브러리 vs 앱 경계
 
 ### 라이브러리 (SimpleNetEngine.Game) — 인프라 제공
 
@@ -34,7 +34,7 @@
 
 ---
 
-## ILoginHandler 인터페이스 (앱의 확장점)
+## 🔌 ILoginHandler 인터페이스 (앱의 확장점)
 
 ```csharp
 public interface ILoginHandler
@@ -100,7 +100,7 @@ public readonly record struct ReconnectGapInfo(
 
 ---
 
-## Actor 상태 전이
+## 🔄 Actor 상태 전이
 
 ```
 Created → Authenticating → Active
@@ -126,7 +126,7 @@ Created → Authenticating → Active
 
 ---
 
-## 클라이언트 접속 플로우
+## 🔐 클라이언트 접속 플로우
 
 ### 1. 신규 유저 플로우
 
@@ -193,7 +193,7 @@ else
 
 ---
 
-## 중복 로그인 처리
+## 🔄 중복 로그인 처리
 
 ### Same-Node 중복 로그인
 
@@ -257,7 +257,7 @@ T4: GameServer-A가 Redis 삭제하면 → SessionB가 삭제됨 ❌
 
 ---
 
-## Heartbeat (Ping/Pong)
+## 💓 Heartbeat (Ping/Pong)
 
 > 상세 설계: [HEARTBEAT_DESIGN.md](HEARTBEAT_DESIGN.md)
 
@@ -298,7 +298,7 @@ public class GameOptions
 
 ---
 
-## ReconnectKey 관리
+## 🔑 ReconnectKey 관리
 
 ### Redis 저장 구조
 
@@ -353,7 +353,7 @@ public interface ISessionStore
 
 ---
 
-## 재접속 시 Actor 2개 문제
+## 🔀 재접속 시 Actor 2개 문제
 
 재접속 시 일시적으로 Actor가 2개 존재:
 - **기존 Actor** (Disconnected 상태, 게임 데이터 보유)
@@ -370,7 +370,7 @@ ReconnectReq 성공 시:
 
 ---
 
-## 분산 락 (동시 로그인 방지)
+## 🔒 분산 락 (동시 로그인 방지)
 
 ```csharp
 // LoginController 내부
@@ -386,7 +386,7 @@ if (lockObj == null)
 
 ---
 
-## Proto 정의
+## 📝 Proto 정의 (추가)
 
 ```protobuf
 // 재접속
@@ -416,7 +416,7 @@ message LogoutRes { bool success = 1; }
 
 ---
 
-## 구현 그룹
+## 📊 구현 그룹
 
 | 그룹 | 작업 내용 | 의존성 |
 |------|----------|--------|
@@ -430,7 +430,7 @@ message LogoutRes { bool success = 1; }
 
 ---
 
-## 구현 완료 상태
+## ✅ 구현 완료 상태
 
 | 그룹 | 상태 | 주요 파일 |
 |------|------|-----------|
@@ -442,3 +442,7 @@ message LogoutRes { bool success = 1; }
 | G7 | ✅ 완료 | 문서 최종 업데이트 |
 
 ---
+
+**문서 버전**: 2.1
+**작성일**: 2026-03-13
+**기반 문서**: `docs/SESSION_LIFECYCLE.md`, `docs/ENCRYPTION_COMPRESSION_DESIGN.md`

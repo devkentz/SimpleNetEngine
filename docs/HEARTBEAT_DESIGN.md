@@ -1,15 +1,15 @@
 # Heartbeat 설계 명세서
 
-## 개요
+## 📌 개요
 
 Client-driven Heartbeat + GameServer Inactivity 감지 방식으로 설계한다.
 기존 Gateway 주도 Ping/Pong 방식은 Dumb Proxy 원칙을 위반하므로 폐기한다.
 
-클라이언트가 idle 시에만 PingReq를 보내고, GameServer가 Inactivity를 감지하여 Disconnect를 결정한다.
+**핵심 원칙**: 클라이언트가 idle 시에만 PingReq를 보내고, GameServer가 Inactivity를 감지하여 Disconnect를 결정한다.
 
 ---
 
-## 기존 설계 vs 변경 설계
+## 🔄 기존 설계 vs 변경 설계
 
 | | 기존 (폐기) | 변경 (신규) |
 |---|---|---|
@@ -28,7 +28,7 @@ Client-driven Heartbeat + GameServer Inactivity 감지 방식으로 설계한다
 
 ---
 
-## Heartbeat 아키텍처
+## 🏗️ 새로운 Heartbeat 아키텍처
 
 ### 데이터 플로우
 
@@ -51,7 +51,7 @@ GameServer → Gateway → Client (PongRes)  [표준 응답 플로우]
 
 ---
 
-## 클라이언트 측 설계
+## 📱 클라이언트 측 설계
 
 ### Idle-based Ping
 
@@ -97,7 +97,7 @@ public class NetClientOptions
 
 ---
 
-## GameServer 측 설계
+## 🖥️ GameServer 측 설계
 
 ### 1. Actor Activity 추적
 
@@ -186,7 +186,7 @@ public class GameOptions
 
 ---
 
-## 타임라인 (비의도적 연결 끊김)
+## ⏱️ 타임라인 (비의도적 연결 끊김)
 
 ### 정상 Idle 유지
 
@@ -223,7 +223,7 @@ public class GameOptions
 
 ---
 
-## 제거 대상 (Gateway)
+## 🔧 제거 대상 (Gateway)
 
 ### GatewaySession.cs
 - `StartHeartbeat()`, `StopHeartbeat()`
@@ -243,7 +243,7 @@ public class GameOptions
 
 ---
 
-## 추가 대상 (GameServer)
+## 📦 추가 대상 (GameServer)
 
 ### ISessionActor / SessionActor
 - `long LastActivityTicks` 프로퍼티
@@ -262,7 +262,7 @@ public class GameOptions
 
 ---
 
-## 설계 결정 사항
+## ⚠️ 설계 결정 사항
 
 ### Q: 왜 Gateway가 아닌 GameServer에서 Heartbeat를 처리하는가?
 

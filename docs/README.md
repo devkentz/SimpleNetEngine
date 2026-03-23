@@ -1,5 +1,8 @@
 # SimpleNetEngine 문서
 
+**버전:** 2.0
+**최종 업데이트:** 2026-03-12
+
 ---
 
 ## 개요
@@ -22,6 +25,7 @@
    - 두 개의 독립적인 망 (Network Dualism)
    - 핵심 개념 및 설계 원칙
    - 통신 흐름 다이어그램
+   - **시작점**: 이 문서부터 읽으세요!
 
 2. **[Game Session Channel](architecture/02-game-session-channel.md)**
    - 클라이언트 ↔ 서버 게임 패킷 전송
@@ -111,17 +115,17 @@ public class YourNodeController
 - Game Session Channel: 게임 데이터 전송 (초저지연)
 - Node Service Mesh: 서버 관리 통신 (일반 지연)
 
-### 2. Dumb Proxy
+### 2. Gateway as Dumb Proxy
 - 패킷 내용 분석 없이 투명하게 포워딩
 - Session ID 기반 라우팅
 - 최소한의 메모리 사용
 
-### 3. Smart Hub
+### 3. GameServer as Smart Hub
 - 모든 비즈니스 로직 및 상태 관리
 - Session 생명주기 관리
 - Stateless Service 호출 (BFF)
 
-### 4. Stateless Services
+### 4. Stateless Services Isolation
 - Gateway/GameServer와 독립적 동작
 - Node Service Mesh 통신만 허용
 - 수평 확장 가능
@@ -153,6 +157,12 @@ public class YourNodeController
 
 | 용어 | 설명 |
 |------|------|
+| **Game Session Channel** | 클라이언트-서버 간 게임 데이터 전송 망 (Data Plane) |
+| **Node Service Mesh** | 서버 간 제어 및 관리 통신 망 (Control Plane) |
+| **Dumb Proxy** | 패킷 내용을 분석하지 않고 라우팅만 하는 Gateway |
+| **Smart Hub** | 모든 비즈니스 로직을 처리하는 GameServer |
+| **BFF** | Backend for Frontend (GameServer의 역할) |
+| **SSOT** | Single Source of Truth (Redis 세션 저장소) |
 | **MsgId** | FNV-1a 32bit hash 기반 메시지 식별자 |
 | **Source Generator** | 컴파일 타임 코드 생성 (Zero-Reflection) |
 
@@ -174,3 +184,11 @@ Sample/NodeSample (App)                — Stateless Service 실행 프로젝트
 Sample/Sample.AppHost (App)            — Aspire 오케스트레이션
 ```
 
+---
+
+## 변경 이력
+
+| 날짜 | 버전 | 주요 변경 사항 |
+|------|------|----------------|
+| 2024-12-01 | 1.0 | 초기 문서 작성 |
+| 2026-03-12 | 2.0 | SimpleNetEngine.* 네임스페이스 전환, Gateway/Game 라이브러리화, Source Generator 도입, 문서 전면 업데이트 |

@@ -1,12 +1,12 @@
 # 세션 생명주기 및 소켓 관리 명세서
 
-## 개요
+## 📌 개요
 
 모바일 환경(핸드오버, 네트워크 불안정)을 고려한 분산 게임 서버의 세션 관리 및 재접속 처리 명세
 
 ---
 
-## 소켓 생성 시나리오
+## 🔄 소켓 생성 3가지 시나리오
 
 ### 1. 최초 로그인 (New Login)
 
@@ -58,7 +58,9 @@ if (existingSession == null)
 
 **상황**: 기존 접속 정보가 있으나 SessionToken이 다름 (다른 기기에서 로그인)
 
-기존 세션을 안전하게 정리한 후 신규 로그인을 진행한다. Game Server A의 저장 완료 콜백을 기다린 후 Game Server B가 처리해야 상태 동기화가 보장된다.
+**핵심 원칙**:
+- 기존 세션을 안전하게 정리한 후 신규 로그인 진행
+- **Game Server A의 저장 완료 콜백을 기다린 후** Game Server B가 처리 (상태 동기화 보장)
 
 **흐름**:
 ```
@@ -162,7 +164,10 @@ public async Task<KickoutAck> OnKickoutRequest(KickoutRequest req)
 
 **상황**: TCP 연결 불안정 (모바일 핸드오버 등), SessionToken 동일
 
-기존 세션이 살아있는 Game Server로 라우팅을 재조정(Re-pinning)한다. 스냅샷 동기화로 현재 상태만 전송하고(이벤트 히스토리 재전송 X), Sequence ID로 중복 처리를 방지한다.
+**핵심 원칙**:
+- 기존 세션이 살아있는 Game Server로 라우팅 재조정 (Re-pinning)
+- **스냅샷 동기화**: 현재 상태만 전송 (이벤트 히스토리 재전송 X)
+- **멱등성 보장**: Sequence ID로 중복 처리 방지
 
 **흐름**:
 ```
@@ -274,7 +279,7 @@ private StateSnapshotPacket CreateStateSnapshot(UserSession session)
 
 ---
 
-## 멱등성 보장
+## 🔒 멱등성 (Idempotency) 보장
 
 ### 문제 상황
 
@@ -348,9 +353,9 @@ public struct ClientPacketHeader
 
 ---
 
-## Gateway 세션별 라우팅 관리
+## 🏗️ Gateway 세션별 라우팅 관리
 
-### 잘못된 방식: 싱글톤 Dictionary
+### ❌ 잘못된 방식: 싱글톤 Dictionary
 
 ```csharp
 // 안티패턴
@@ -365,7 +370,7 @@ public class SessionMapper
 }
 ```
 
-### 올바른 방식: 세션 객체 내부 관리
+### ✅ 올바른 방식: 세션 객체 내부 관리
 
 ```csharp
 public class GatewaySession : TcpSession
@@ -434,7 +439,7 @@ public class GatewaySession : TcpSession
 
 ---
 
-## P2P 프로토콜 확장
+## 📊 P2P 프로토콜 확장
 
 ### 새로운 제어 명령 추가
 
@@ -457,7 +462,7 @@ public struct ReroutePayload
 
 ---
 
-## 구현 체크리스트
+## 🎯 구현 체크리스트
 
 ### Gateway
 - [ ] GatewaySession에 `PinnedGameServerNodeId` 필드 추가
@@ -483,7 +488,7 @@ public struct ReroutePayload
 
 ---
 
-## 향후 고도화 방안
+## 🔮 향후 고도화 방안
 
 1. **패킷 캐싱** (선택적):
    - 서버가 보낸 패킷을 Ring Buffer에 캐싱
@@ -503,3 +508,7 @@ public struct ReroutePayload
    - Gateway → GameServer → Service 전체 추적
 
 ---
+
+**문서 버전**: 2.0
+**최종 수정일**: 2026-02-25
+**작성자**: NetworkEngine Team

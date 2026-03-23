@@ -9,7 +9,7 @@
 
 ## 2. 메모리 풀링 (ArrayPool 기반 커스텀 BufferPool)
 
-NetMQ는 기본적으로 내부 버퍼 풀(`GCBufferPool`)을 사용하지만, 대규모 동시 접속 환경에서는 .NET BCL의 `ArrayPool<byte>`를 사용하는 것이 성능상 유리합니다. 특히 범용 `Shared` 풀 대신 네트워크 전용으로 **독립된 풀(`ArrayPool<byte>.Create`)**을 구성하여 자원 격리와 최적의 튜닝을 달성합니다.
+NetMQ는 기본적으로 내부 버퍼 풀(`GCBufferPool`)을 사용하지만, 대규모 동시 접속 환경에서는 .NET BCL의 `ArrayPool<byte>`를 사용하는 것이 성능상 압도적으로 유리합니다. 특히 범용 `Shared` 풀 대신 네트워크 전용으로 **독립된 풀(`ArrayPool<byte>.Create`)**을 구성하여 자원 격리와 최적의 튜닝을 달성합니다.
 
 ### 왜 `Shared` 대신 `Create()`를 사용하는가?
 1. **자원 격리**: JSON 직렬화기나 ASP.NET Core 등 다른 시스템이 버퍼를 고갈시켜도 네트워크 엔진(NetMQ)은 안정적으로 버퍼를 공급받을 수 있습니다.
@@ -127,7 +127,7 @@ public void OnReceiveReady(object sender, NetMQSocketEventArgs e)
 
 ## 4. GameSessionChannel 라우팅 제로 카피 (Headroom 예약)
 
-GameServer에서 클라이언트로 보내는 응답 패킷을 생성할 때, Gateway에서 발생하는 **버퍼 재할당 및 복사 오버헤드를 없애기 위해** 사전에 `EndPointHeader` 공간을 포함하여 메모리를 구성(Pre-allocation)하는 최적화 기법입니다.
+GameServer에서 클라이언트로 보내는 응답 패킷을 생성할 때, Gateway에서 발생하는 **버퍼 재할당 및 복사 오버헤드를 없애기 위해** 사전에 `EndPointHeader` 공간을 포함하여 메모리를 구성(Pre-allocation)하는 강력한 최적화 기법입니다.
 
 ### 패킷 메모리 레이아웃 전략
 Gateway를 거쳐 Client로 전달되는 패킷은 다음과 같이 하나의 연속된 버퍼로 할당되어 전송됩니다.
