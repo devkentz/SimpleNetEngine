@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package proto.sample;
+
+// ===== User (Client ↔ GameServer) Messages =====
+
+// 에코 요청
+message EchoReq
+{
+    string message = 1;
+    int32 timestamp = 2;
+}
+
+// 에코 응답
+message EchoRes
+{
+    string message = 1;
+    int32 timestamp = 2;
+}
+
+message NodeEchoReq
+{
+  string message = 1;
+  int32 timestamp = 2;
+}
+
+// 에코 응답
+message NodeEchoRes
+{
+  string message = 1;
+  int32 timestamp = 2;
+}
+
+
+enum ErrorCode
+{
+  InvalidError = 0;
+  ServerError = 1;
+}

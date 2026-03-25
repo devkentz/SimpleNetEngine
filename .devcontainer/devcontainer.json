@@ -1,0 +1,21 @@
+{
+  "name": "SimpleNetEngine Aspire",
+  "image": "mcr.microsoft.com/dotnet/sdk:10.0",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "postCreateCommand": "dotnet workload install aspire",
+  "forwardPorts": [15058, 5000],
+  "portsAttributes": {
+    "15058": { "label": "Aspire Dashboard", "onAutoForward": "notify" },
+    "5000": { "label": "Gateway TCP", "onAutoForward": "silent" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "ms-dotnettools.csharp"
+      ]
+    }
+  }
+}
